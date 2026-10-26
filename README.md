@@ -12,4 +12,5 @@ Rodzinna tablica obowiązków: domownicy odhaczają wykonane czynności (np. roz
 Kolekcje w bazie:
 - `members` — domownicy `{name, slot, order}` (slot = kolor z palety 0–7)
 - `chores` — czynności `{name, icon, order}`
+- `meta` — znaczniki jednorazowych zmian (np. `czynnosci-2026-10-26`: dodany zestaw 11 czynności), żeby usunięte czynności nie wracały
 - `entries` — wpisy `{m, mn, ms, c, cn, ci, once?, d?, day, t}` (`c = "_once"` dla czynności jednorazowych, `d` = opis); trzymają też imię i nazwę czynności, więc po usunięciu domownika lub czynności historia nadal pokazuje nazwy

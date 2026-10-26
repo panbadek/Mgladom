@@ -3,12 +3,12 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
   updatePassword, reauthenticateWithCredential, EmailAuthProvider }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where }
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261026-202246";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-202246";
+import { firebaseConfig } from "./firebase-config.js?v=20261026-202906";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-202906";
 
-const BUILD = "20261026-202246";
+const BUILD = "20261026-202906";
 // Wspólne konto rodziny: stały adres w domenie projektu, hasło zna cała rodzina.
 const FAMILY_EMAIL = "rodzina@" + firebaseConfig.authDomain;
 
@@ -39,11 +39,28 @@ const ONCE = "_once";
 const WINDOW_DAYS = 30;
 const SUGGESTIONS = ["Zmywanie naczyń","Odkurzanie","Wyprowadzenie psa","Pranie","Rozwieszenie prania","Podlewanie kwiatów","Zakupy","Gotowanie obiadu","Nakrycie do stołu","Sprzątanie łazienki","Ścielenie łóżka","Karmienie kota","Mycie okien","Prasowanie","Wycieranie kurzu"];
 const DAY_ABBR = ["Nd","Pn","Wt","Śr","Cz","Pt","So"];
+// Zestaw czynności dodawany do bazy jeden raz (znacznik w meta/…), żeby usunięte później nie wracały.
+const SEED_ID = "czynnosci-2026-10-26";
+const SEED = [
+  ["wstawienie-prania", "Wstawienie prania", "washer"],
+  ["rozwieszenie-prania-suszarka", "Rozwieszenie prania i wstawienie suszarki", "hanger"],
+  ["odkurzenie-przedpokoju", "Odkurzenie całego przedpokoju", "vac_hall"],
+  ["odkurzenie-salonu", "Odkurzenie całego salonu", "vac_sofa"],
+  ["smieci-i-worki", "Wyrzucenie śmieci (w tym z łazienek) i włożenie worków", "garbage"],
+  ["zakupy-domowe", "Zrobienie zakupów domowych", "cart"],
+  ["butelki-kaucyjne", "Wyniesienie butelek kaucyjnych", "bottles"],
+  ["posilek-2-osoby", "Przygotowanie posiłku dla co najmniej 2 osób", "pot"],
+  ["obiad-kupiony-2-osoby", "Kupienie obiadu dla co najmniej 2 osób", "meal"],
+  ["wystawienie-zmywarki", "Wystawienie rzeczy ze zmywarki", "dishwasher"],
+  ["reczne-naczynia-ociekacz", "Umycie ręczne naczyń i uprzątnięcie ociekacza", "sink"]
+];
 const TICK_SVG = '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M5 12.5l4.5 4.5L19 7.5"/></svg>';
 
 const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const clean = (s, max) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, max);
+// porównywanie nazw bez wielkości liter i polskich znaków („wstawienie prania” = „Wstawienie prania”)
+const norm = s => String(s || "").toLowerCase().replace(/ł/g, "l").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
 const cleanNote = s => String(s == null ? "" : s).replace(/[\r\n]+/g, " ").trim().slice(0, 200);
 const pad = n => String(n).padStart(2, "0");
 const keyOf = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -121,7 +138,7 @@ function parseMember(d) {
 }
 function parseChore(d) {
   const x = d.data(); if (!x || typeof x.name !== "string") return null;
-  return { id: d.id, name: clean(x.name, 50) || "Bez nazwy", icon: typeof x.icon === "string" ? x.icon : null, order: Number.isFinite(x.order) ? x.order : 0 };
+  return { id: d.id, name: clean(x.name, 80) || "Bez nazwy", icon: typeof x.icon === "string" ? x.icon : null, order: Number.isFinite(x.order) ? x.order : 0 };
 }
 function parseEntry(d) {
   const x = d.data();
@@ -129,7 +146,7 @@ function parseEntry(d) {
   const legacy = LEGACY[String(x.mc || "").toUpperCase()];
   return { id: d.id, m: x.m, c: x.c, day: x.day, t: x.t, mn: clean(x.mn, 30),
     ms: validSlot(x.ms) ? x.ms : (legacy != null ? legacy : hashSlot(x.m)),
-    cn: clean(x.cn, 50), ci: typeof x.ci === "string" ? x.ci : null, once: x.once === true || x.c === ONCE, d: cleanNote(x.d) };
+    cn: clean(x.cn, 80), ci: typeof x.ci === "string" ? x.ci : null, once: x.once === true || x.c === ONCE, d: cleanNote(x.d) };
 }
 function rebuildGhosts() {
   ghostM = {}; ghostC = {};
@@ -204,12 +221,12 @@ function renderTiles(force) {
     let html = "";
     if (!chores.length) html += '<p class="muted span">Nie ma jeszcze żadnej czynności. Dodaj ją kafelkiem „Inna czynność” albo w Ustawieniach.</p>';
     html += chores.map(c => '<button type="button" class="tile" data-action="log" data-id="' + esc(c.id) + '"' + (dis ? " disabled" : "") + ">" +
-      '<span class="ic">' + iconSvg(choreIcon(c)) + '</span><span class="tname">' + esc(c.name) + "</span>" +
+      '<span class="ic">' + iconSvg(choreIcon(c)) + '</span><span class="tname' + (c.name.length > 30 ? " long" : "") + '">' + esc(c.name) + "</span>" +
       '<span class="badge" hidden></span><span class="tick">' + TICK_SVG + "</span></button>").join("");
     html += addingChore
       ? '<form class="tile tile-form" data-form="tile-chore" autocomplete="off">' +
         '<label class="tname" for="tile-chore">Inna czynność</label>' +
-        '<input id="tile-chore" maxlength="50" placeholder="Np. Mycie samochodu">' +
+        '<input id="tile-chore" maxlength="80" placeholder="Np. Mycie samochodu">' +
         '<div class="icon-pick" id="tile-icons" role="radiogroup" aria-label="Ikonka">' + pickerHtml(newIcon, "tile-icon") + "</div>" +
         '<label class="check"><input type="checkbox" id="tile-once"><span>Jednorazowa<small>Nie dodawaj jej do listy czynności</small></span></label>' +
         '<div class="row"><button class="btn primary sm" type="submit">Zgłoś</button><button type="button" class="btn ghost sm" data-action="cancel-chore">Anuluj</button></div></form>'
@@ -491,8 +508,8 @@ function renderManage() {
   if (swatch == null || used.has(swatch)) { const free = [...Array(SLOTS).keys()].find(s => !used.has(s)); swatch = free != null ? free : (swatch != null ? swatch : 0); }
   $("#swatches").innerHTML = [...Array(SLOTS).keys()].map(s => '<button type="button" class="sw" role="radio" aria-checked="' + (s === swatch) + '" aria-label="Kolor ' + (s + 1) + '" data-action="swatch" data-slot="' + s + '" style="' + cvar(s) + '"></button>').join("");
   const ci = $("#c-icons"); if (!ci.children.length) ci.innerHTML = pickerHtml(mIcon, "m-icon"); else markPicker(ci, mIcon);
-  const have = new Set(chores.map(c => c.name.toLowerCase()));
-  const sug = SUGGESTIONS.filter(s => !have.has(s.toLowerCase()));
+  const have = new Set(chores.map(c => norm(c.name)));
+  const sug = SUGGESTIONS.filter(s => !have.has(norm(s)));
   $("#sugg").innerHTML = sug.map(s => '<button type="button" class="sugg-chip" data-action="sugg" data-name="' + esc(s) + '">+ ' + esc(s) + "</button>").join("");
   $("#sugg-lbl").hidden = !sug.length;
   $("#app-url").textContent = location.origin + location.pathname;
@@ -549,7 +566,7 @@ function logEntry(chore) {
 async function addMember(raw) {
   const name = clean(raw, 30);
   if (!name) return false;
-  if (members.some(m => m.name.toLowerCase() === name.toLowerCase())) { toast(name + " już jest na liście."); return false; }
+  if (members.some(m => norm(m.name) === norm(name))) { toast(name + " już jest na liście."); return false; }
   const used = new Set(members.map(m => m.slot));
   const slot = (swatch != null && !used.has(swatch)) ? swatch : ([...Array(SLOTS).keys()].find(s => !used.has(s)) ?? (members.length % SLOTS));
   setDoc(doc(fs, "members", newId("members")), { name, slot, order: Date.now() }).catch(handleErr);
@@ -557,9 +574,9 @@ async function addMember(raw) {
   return true;
 }
 function addChore(raw, icon) {
-  const name = clean(raw, 50);
+  const name = clean(raw, 80);
   if (!name) return null;
-  const existing = chores.find(c => c.name.toLowerCase() === name.toLowerCase());
+  const existing = chores.find(c => norm(c.name) === norm(name));
   if (existing) return existing;
   const ch = { id: newId("chores"), name, icon: icon || guessIcon(name) };
   setDoc(doc(fs, "chores", ch.id), { name, icon: ch.icon, order: Date.now() }).catch(handleErr);
@@ -642,12 +659,12 @@ document.addEventListener("submit", async e => {
     if (await addMember(val) && input) input.value = "";
     if (kind === "quick-member" && input) input.blur();
   } else if (kind === "chore") {
-    const name = clean(val, 50); if (!name) return;
-    if (chores.some(c => c.name.toLowerCase() === name.toLowerCase())) { toast("„" + name + "” już jest na liście."); return; }
+    const name = clean(val, 80); if (!name) return;
+    if (chores.some(c => norm(c.name) === norm(name))) { toast("„" + name + "” już jest na liście."); return; }
     addChore(name, mIcon); toast("Dodano czynność: " + name);
     input.value = ""; mIcon = "check"; mIconManual = false; markPicker($("#c-icons"), mIcon);
   } else if (kind === "tile-chore") {
-    const name = clean(val, 50);
+    const name = clean(val, 80);
     if (!name) { toast("Wpisz, co zostało zrobione.", null, "err"); return; }
     if (!selected) { toast("Najpierw wybierz, kto to zrobił.", null, "err"); return; }
     const once = $("#tile-once").checked;
@@ -732,6 +749,32 @@ async function changePass(form) {
   } catch (ex) { toast(PL_ERR[ex.code] || ("Nie udało się zmienić hasła: " + ex.message), null, "err"); }
 }
 
+/* ---------- jednorazowe dodanie zestawu czynności ---------- */
+let seedTried = false;
+async function runSeed() {
+  if (seedTried) return; seedTried = true;
+  try {
+    const mark = await getDocFromServer(doc(fs, "meta", SEED_ID));
+    if (mark.exists()) return;
+    const snap = await getDocsFromServer(collection(fs, "chores"));
+    const have = new Map(snap.docs.map(d => [norm(d.data().name), d]));
+    const batch = writeBatch(fs), base = Date.now();
+    let added = 0;
+    SEED.forEach(([id, name, icon], i) => {
+      const same = have.get(norm(name));
+      // taka czynność już jest (np. wpisana bez polskich znaków) → tylko poprawiamy nazwę i ikonkę
+      if (same) { batch.update(same.ref, { name, icon }); return; }
+      batch.set(doc(fs, "chores", id), { name, icon, order: base + i }); added++;
+    });
+    batch.set(doc(fs, "meta", SEED_ID), { at: base, added });
+    await batch.commit();
+    if (added) toast("Dodano " + added + " " + (added === 1 ? "nową czynność" : (added % 10 >= 2 && added % 10 <= 4 && (added % 100 < 12 || added % 100 > 14) ? "nowe czynności" : "nowych czynności")) + ".");
+  } catch (e) {
+    console.warn("zestaw czynności:", e);
+    if (e && e.code === "permission-denied") showNotice("Żeby pojawiły się nowe czynności, wklej w Firebase najnowsze reguły bazy (Firestore → Rules → Publish) i odśwież stronę.");
+  }
+}
+
 /* ---------- dane na żywo ---------- */
 function subErr(e) {
   console.warn(e);
@@ -772,7 +815,7 @@ onAuthStateChanged(auth, user => {
     signedIn = true;
     $("#login").hidden = true; $("#app").hidden = false;
     showNotice("");
-    renderHeader(); renderSegs(); renderTabs(); renderAll(); subscribe();
+    renderHeader(); renderSegs(); renderTabs(); renderAll(); subscribe(); runSeed();
   } else if (!ok) {
     signedIn = false; unsubscribeAll();
     $("#app").hidden = true; $("#login").hidden = false;

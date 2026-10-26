@@ -22,25 +22,34 @@ export const ICONS = {
   plant: '<path d="M7.5 15h9l-1.2 6H8.7z"/><path d="M12 15v-4.5M12 10.5c0-3.3-2.4-5.5-6-5.5 0 3.4 2.4 5.5 6 5.5zM12 9c0-3.3 2.4-5.5 6-5.5 0 3.4-2.4 5.5-6 5.5z"/>',
   paw: '<circle cx="6" cy="11" r="1.8"/><circle cx="9.5" cy="6.5" r="1.8"/><circle cx="14.5" cy="6.5" r="1.8"/><circle cx="18" cy="11" r="1.8"/><path d="M12 12c-2.8 0-5 3.2-5 5.5 0 1.6 1.2 2.5 2.6 2.5 1 0 1.6-.5 2.4-.5s1.4.5 2.4.5c1.4 0 2.6-.9 2.6-2.5 0-2.3-2.2-5.5-5-5.5z"/>',
   cat: '<path d="M4.5 3.8l3.8 3.4a8.6 8.6 0 0 1 7.4 0l3.8-3.4V13a7.5 7 0 0 1-15 0z"/><path d="M9 12.5h.01M15 12.5h.01M11.2 15.2h1.6L12 16.2z"/><path d="M2.5 14.5l3 .5M2.5 17l3-.5M21.5 14.5l-3 .5M21.5 17l-3-.5"/>',
+  garbage: '<path d="M9 8.5C6.6 10.4 5 13.2 5 16a5 5 0 0 0 5 5h4a5 5 0 0 0 5-5c0-2.8-1.6-5.6-4-7.5z"/><path d="M9 8.5h6"/><path d="M9.8 8.5L8 4.5l4 1.6 4-1.6-1.8 4"/>',
+  bottles: '<path d="M7.5 2.5h3V5L12 7.5V20a1.5 1.5 0 0 1-1.5 1.5h-3A1.5 1.5 0 0 1 6 20V7.5L7.5 5z"/><path d="M6 11.5h6M6 15.5h6"/><path d="M14.5 9.5h5.5V20a1.5 1.5 0 0 1-1.5 1.5H16a1.5 1.5 0 0 1-1.5-1.5z"/><path d="M14.5 12h5.5M15.8 7.5h3"/>',
+  meal: '<path d="M3 17.5h18M4.5 17.5a7.5 7.5 0 0 1 15 0M12 10V8.5M10.5 8.5h3M3 20.5h18"/>',
+  vac_hall: '<path d="M3.5 21V4.2A1.2 1.2 0 0 1 4.7 3h6.6a1.2 1.2 0 0 1 1.2 1.2V21"/><circle cx="10.2" cy="12.5" r=".9"/><path d="M20.5 3.5l-2 13.5"/><path d="M15.2 17.5h5.5a1.5 1.5 0 0 1 0 3h-5.5a1.5 1.5 0 0 1 0-3z"/><path d="M2 21h11"/>',
+  vac_sofa: '<path d="M3.5 13.5V12a1.8 1.8 0 0 1 1.8-1.8h5.4A1.8 1.8 0 0 1 12.5 12v1.5"/><path d="M2 14.8a1.3 1.3 0 0 1 2.6 0v1h6.8v-1a1.3 1.3 0 0 1 2.6 0V19H2z"/><path d="M3 19v1.5M13 19v1.5"/><path d="M20.8 3.5l-2 13.5"/><path d="M15.8 17.5h5a1.5 1.5 0 0 1 0 3h-5a1.5 1.5 0 0 1 0-3z"/>',
   check: '<circle cx="12" cy="12" r="8.5"/><path d="M8.3 12.2l2.6 2.6 4.8-5.4"/>'
 };
 
 // Kolejność i podpisy w wyborze ikonki
 export const ICON_LIST = [
-  ["dishwasher","Zmywarka"],["rack","Ociekacz"],["sink","Naczynia"],["trash","Śmieci"],["cart","Zakupy"],["package","Paczka"],
-  ["pot","Gotowanie"],["plate","Stół"],["washer","Pralka"],["dryer","Suszarka"],["hanger","Rozwieszanie"],["basket","Pranie"],
-  ["iron","Prasowanie"],["bath","Łazienka"],["broom","Zamiatanie"],["vacuum","Odkurzanie"],["window","Okna"],["spray","Wycieranie"],
-  ["bed","Łóżko"],["plant","Kwiaty"],["paw","Pies"],["cat","Kot"],["check","Inne"]
+  ["dishwasher","Zmywarka"],["rack","Ociekacz"],["sink","Mycie naczyń"],["trash","Śmieci"],["garbage","Worki na śmieci"],["bottles","Butelki kaucyjne"],
+  ["cart","Zakupy"],["package","Paczka"],["pot","Gotowanie"],["meal","Obiad na wynos"],["plate","Stół"],["washer","Pralka"],
+  ["dryer","Suszarka"],["hanger","Rozwieszanie"],["basket","Pranie"],["iron","Prasowanie"],["bath","Łazienka"],["broom","Zamiatanie"],
+  ["vacuum","Odkurzanie"],["vac_hall","Odkurzanie przedpokoju"],["vac_sofa","Odkurzanie salonu"],["window","Okna"],["spray","Wycieranie"],["bed","Łóżko"],
+  ["plant","Kwiaty"],["paw","Pies"],["cat","Kot"],["check","Inne"]
 ];
 
 const RULES = [
+  [/ręczn|recznie|umyci\S* naczy/, "sink"],
   [/ociekacz|suszark\S* na naczy/, "rack"],
   [/zmywar/, "dishwasher"],
   [/naczy|zmywan|garn/, "sink"],
+  [/work[óo]w|worek|worki/, "garbage"],
+  [/butel|kaucj|puszk/, "bottles"],
   [/łazien|lazien|toalet|wann|prysznic|umywal|sedes/, "bath"],
-  [/suszark|suszen/, "dryer"],
-  [/pralk/, "washer"],
   [/rozwies|wiesza|zdj[eę]\S* prani|składan|skladan/, "hanger"],
+  [/suszark|suszen/, "dryer"],
+  [/wstaw\S* prani|pralk/, "washer"],
   [/prasow/, "iron"],
   [/pran|ubra|skarpet/, "basket"],
   [/śmie|smiec|kosz|segreg|odpad/, "trash"],
@@ -48,11 +57,14 @@ const RULES = [
   [/kot|kuwet/, "cat"],
   [/kwiat|podlew|rośl|rosl/, "plant"],
   [/paczk|kurier|poczt|przesyłk|przesylk/, "package"],
+  [/kupi\S* obiad|na wynos|zamów|zamow|dostaw|restaurac/, "meal"],
   [/zakup|sklep/, "cart"],
-  [/gotow|obiad|kolacj|śniad|sniad|piecz/, "pot"],
+  [/gotow|obiad|kolacj|śniad|sniad|piecz|posił|posil/, "pot"],
   [/stół|stol|nakry/, "plate"],
   [/łóż|łoż|lozk|pości|posci/, "bed"],
   [/okn|okien|okno|szyb/, "window"],
+  [/przedpok|korytarz/, "vac_hall"],
+  [/salon|kanap|sofa/, "vac_sofa"],
   [/odkurz/, "vacuum"],
   [/zamiat|sprząt|sprzat|porząd|porzad|mop|podłog|podlog/, "broom"],
   [/kurz|blat|wycier|przetar/, "spray"]

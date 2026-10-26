@@ -19,7 +19,11 @@ service cloud.firestore {
     }
     match /chores/{id} {
       allow read, delete: if rodzina();
-      allow create, update: if rodzina() && tekst('name', 50);
+      allow create, update: if rodzina() && tekst('name', 80);
+    }
+    // znaczniki jednorazowych zmian (np. dodany zestaw czynności)
+    match /meta/{id} {
+      allow read, write: if rodzina();
     }
     match /entries/{id} {
       allow read, delete: if rodzina();
