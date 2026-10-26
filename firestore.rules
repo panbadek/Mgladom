@@ -3,7 +3,7 @@ service cloud.firestore {
   match /databases/{db}/documents {
     // Dostęp ma tylko wspólne konto rodziny (logowanie hasłem rodziny w aplikacji).
     function rodzina() {
-      return request.auth != null && request.auth.token.email == 'rodzina@WSTAW.firebaseapp.com';
+      return request.auth != null && request.auth.token.email == 'rodzina@mgladom.firebaseapp.com';
     }
     function tekst(pole, max) {
       return request.resource.data[pole] is string && request.resource.data[pole].size() > 0 && request.resource.data[pole].size() <= max;
