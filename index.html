@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261026-202906">
+<link rel="manifest" href="manifest.json?v=20261026-212010">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -103,6 +103,16 @@ input:disabled{ opacity:.6 }
 .login{ min-height:calc(100vh - 40px); display:grid; place-items:center; padding-block:32px }
 .login-card{ width:100%; max-width:380px; display:grid; gap:14px }
 .lerr{ color:var(--danger); font-weight:700; font-size:15px }
+.login-card .lbl{ margin:0 }
+.login-links{ display:grid; gap:6px; justify-items:start }
+.login-links .linkbtn{ text-align:left }
+.linkbtn.small{ font-size:14px; font-weight:400; color:var(--muted) }
+input.pin{ font-size:22px; letter-spacing:.45em; font-variant-numeric:tabular-nums; max-width:11rem; padding-block:8px }
+input.pin::placeholder{ letter-spacing:.3em }
+.fam-line{ margin-top:8px; font-weight:700; color:var(--accent); font-size:16px }
+.top-act{ display:flex; gap:8px; flex-wrap:wrap }
+.edit-form{ display:flex; align-items:center; flex-wrap:wrap; gap:8px 10px; width:100% }
+.edit-form > input{ flex:1 1 9rem }
 .stack{ display:grid; gap:8px }
 
 /* zakładka Zgłoś */
@@ -288,9 +298,10 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 }
 @media (min-width:640px){ .sheet-wrap{ align-items:center } .sheet{ border-radius:18px; max-height:84vh; padding:24px } }
 .sheet-head{ display:flex; align-items:center; justify-content:space-between; gap:12px }
+.sheet{ grid-template-columns:minmax(0,1fr) } .sheet > *{ min-width:0 }
 .sheet section{ display:grid; gap:4px }
 .mrow{ display:flex; align-items:center; gap:10px; padding:8px 0; border-bottom:1px solid var(--line-2) }
-.mrow .nm{ flex:1 }
+.mrow .nm{ flex:1; min-width:0; white-space:normal; overflow-wrap:anywhere }
 .icbtn{ display:grid; place-items:center; width:40px; height:40px; border-radius:10px; border:1px dashed var(--line); background:transparent; color:var(--accent); cursor:pointer; padding:0; flex:none }
 .icbtn svg{ width:24px; height:24px }
 .pick-row{ padding:10px 0 12px; border-bottom:1px solid var(--line-2) }
@@ -331,18 +342,28 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
       <p class="eyebrow">Tablica obowiązków rodziny</p>
       <h1>Domowe Dyżury</h1>
     </div>
-    <form id="login-form" class="panel" autocomplete="on">
-      <h2 id="login-h">Wejdź</h2>
-      <p id="login-desc" class="muted">Wpisz hasło rodziny. Ten telefon je zapamięta.</p>
-      <label class="lbl" for="pw" style="margin:0">Hasło rodziny</label>
-      <input id="pw" type="password" autocomplete="current-password" required minlength="6">
-      <div id="pw2-box" class="stack" hidden>
-        <label class="lbl" for="pw2" style="margin:0">Powtórz hasło</label>
-        <input id="pw2" type="password" autocomplete="new-password" minlength="6">
+    <form id="login-form" class="panel" autocomplete="on" novalidate>
+      <h2 id="login-h">Zaloguj rodzinę</h2>
+      <p id="login-desc" class="muted">Wpisz nazwę rodziny i jej 4-cyfrowy PIN.</p>
+      <div id="f-old" class="stack" hidden>
+        <label class="lbl" for="old-pass">Hasło z poprzedniej wersji</label>
+        <input id="old-pass" type="password" autocomplete="current-password">
+      </div>
+      <div id="f-name" class="stack">
+        <label class="lbl" for="fam-name">Nazwa rodziny</label>
+        <input id="fam-name" type="text" autocomplete="username" autocapitalize="words" spellcheck="false" maxlength="30" placeholder="Np. Kowalscy">
+      </div>
+      <div id="f-pin" class="stack">
+        <label class="lbl" for="pin">PIN (4 cyfry)</label>
+        <input id="pin" class="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password" placeholder="••••">
+      </div>
+      <div id="f-pin2" class="stack" hidden>
+        <label class="lbl" for="pin2">Powtórz PIN</label>
+        <input id="pin2" class="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password" placeholder="••••">
       </div>
       <p id="login-err" class="lerr" role="alert" hidden></p>
-      <button id="login-btn" class="btn primary wide" type="submit">Wejdź</button>
-      <button id="login-mode" class="linkbtn" type="button">Pierwsze uruchomienie? Ustaw hasło rodziny</button>
+      <button id="login-btn" class="btn primary wide" type="submit">Zaloguj</button>
+      <div id="login-links" class="login-links"></div>
     </form>
   </div>
 </div>
@@ -353,8 +374,12 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
     <div>
       <p class="eyebrow" id="today-label">&nbsp;</p>
       <h1>Domowe Dyżury</h1>
+      <p class="fam-line" id="fam-label"></p>
     </div>
-    <button type="button" class="btn ghost" data-action="open-manage">Ustawienia</button>
+    <div class="top-act">
+      <button type="button" class="btn ghost" data-action="open-manage">Ustawienia</button>
+      <button type="button" class="btn ghost" data-action="logout">Wyloguj</button>
+    </div>
   </header>
 
   <nav class="tabs" aria-label="Zakładki">
@@ -492,18 +517,19 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
     </section>
     <section aria-labelledby="ml-h">
       <h3 id="ml-h">Link do aplikacji</h3>
-      <p class="muted">Wyślij go domownikom. Na telefonie w Chrome: menu ⋮ → „Dodaj do ekranu głównego”.</p>
+      <p class="muted">Wyślij go domownikom razem z nazwą rodziny i PIN-em. Na Androidzie w Chrome: menu ⋮ → „Dodaj do ekranu głównego”, na iPhonie w Safari: Udostępnij → „Do ekranu początkowego”.</p>
       <div class="row" style="margin-top:6px"><span id="app-url" class="addr"></span><button type="button" class="btn ghost sm" data-action="copy-url">Kopiuj</button></div>
     </section>
     <section aria-labelledby="mp-h">
-      <h3 id="mp-h">Hasło rodziny</h3>
-      <form data-form="pass" class="stack" autocomplete="off">
-        <label class="lbl" for="old-pw">Obecne hasło</label>
-        <input id="old-pw" type="password" autocomplete="current-password">
-        <label class="lbl" for="new-pw" style="margin-top:4px">Nowe hasło (min. 6 znaków)</label>
-        <input id="new-pw" type="password" autocomplete="new-password" minlength="6">
-        <p class="muted" style="font-size:14px">Po zmianie pozostałe telefony trzeba będzie zalogować nowym hasłem.</p>
-        <button class="btn ghost" type="submit">Zmień hasło</button>
+      <h3 id="mp-h">Rodzina i PIN</h3>
+      <p class="muted" id="fam-info"></p>
+      <form data-form="pin" class="stack" autocomplete="off">
+        <label class="lbl" for="old-pin">Obecny PIN</label>
+        <input id="old-pin" class="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="current-password">
+        <label class="lbl" for="new-pin" style="margin-top:4px">Nowy PIN (4 cyfry)</label>
+        <input id="new-pin" class="pin" type="password" inputmode="numeric" maxlength="4" autocomplete="new-password">
+        <p class="muted" style="font-size:14px">Po zmianie pozostałe telefony trzeba będzie zalogować nowym PIN-em.</p>
+        <button class="btn ghost" type="submit">Zmień PIN</button>
       </form>
       <button type="button" class="btn ghost" style="margin-top:14px; justify-self:start" data-action="logout">Wyloguj ten telefon</button>
     </section>
@@ -513,5 +539,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261026-202906"></script>
+<script type="module" src="app.js?v=20261026-212010"></script>
 </body></html>

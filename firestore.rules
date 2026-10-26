@@ -1,36 +1,48 @@
 rules_version = '2';
 service cloud.firestore {
   match /databases/{db}/documents {
-    // Dostęp ma tylko wspólne konto rodziny (logowanie hasłem rodziny w aplikacji).
-    function rodzina() {
-      return request.auth != null && request.auth.token.email == 'rodzina@mgladom.firebaseapp.com';
-    }
     function tekst(pole, max) {
       return request.resource.data[pole] is string && request.resource.data[pole].size() > 0 && request.resource.data[pole].size() <= max;
     }
-
     function opis() {
       return !('d' in request.resource.data) || (request.resource.data.d is string && request.resource.data.d.size() <= 200);
     }
+    // Każda rodzina ma własne konto (nazwa rodziny + PIN) i widzi tylko swoje dane.
+    function moja(fid) {
+      return request.auth != null && request.auth.uid == fid;
+    }
 
-    match /members/{id} {
-      allow read, delete: if rodzina();
-      allow create, update: if rodzina() && tekst('name', 30);
+    match /families/{fid} {
+      allow read: if moja(fid);
+      allow create, update: if moja(fid) && tekst('name', 30);
+
+      match /members/{id} {
+        allow read, delete: if moja(fid);
+        allow create, update: if moja(fid) && tekst('name', 30);
+      }
+      match /chores/{id} {
+        allow read, delete: if moja(fid);
+        allow create, update: if moja(fid) && tekst('name', 80);
+      }
+      match /meta/{id} {
+        allow read, write: if moja(fid);
+      }
+      match /entries/{id} {
+        allow read, delete: if moja(fid);
+        allow create: if moja(fid) && request.resource.data.day is string && request.resource.data.t is number
+          && request.resource.data.m is string && request.resource.data.c is string && opis();
+        // później można zmienić tylko opis wykonanej czynności
+        allow update: if moja(fid) && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['d']) && opis();
+      }
     }
-    match /chores/{id} {
-      allow read, delete: if rodzina();
-      allow create, update: if rodzina() && tekst('name', 80);
+
+    // Poprzednia wersja (jedno wspólne konto z hasłem): tylko odczyt, żeby przenieść dane do rodziny.
+    function stara() {
+      return request.auth != null && request.auth.token.email == 'rodzina@mgladom.firebaseapp.com';
     }
-    // znaczniki jednorazowych zmian (np. dodany zestaw czynności)
-    match /meta/{id} {
-      allow read, write: if rodzina();
-    }
-    match /entries/{id} {
-      allow read, delete: if rodzina();
-      allow create: if rodzina() && request.resource.data.day is string && request.resource.data.t is number
-        && request.resource.data.m is string && request.resource.data.c is string && opis();
-      // później można zmienić tylko opis wykonanej czynności
-      allow update: if rodzina() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['d']) && opis();
-    }
+    match /members/{id} { allow read: if stara(); }
+    match /chores/{id} { allow read: if stara(); }
+    match /entries/{id} { allow read: if stara(); }
+    match /meta/{id} { allow read, write: if stara(); }
   }
 }

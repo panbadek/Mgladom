@@ -1,16 +1,14 @@
-import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
-import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword, signOut,
-  updatePassword, reauthenticateWithCredential, EmailAuthProvider }
+import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
+import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
+  signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDocFromServer, getDocsFromServer, writeBatch }
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDoc, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261026-202906";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-202906";
+import { firebaseConfig } from "./firebase-config.js?v=20261026-212010";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-212010";
 
-const BUILD = "20261026-202906";
-// Wspólne konto rodziny: stały adres w domenie projektu, hasło zna cała rodzina.
-const FAMILY_EMAIL = "rodzina@" + firebaseConfig.authDomain;
+const BUILD = "20261026-212010";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -34,13 +32,12 @@ setTimeout(checkUpdate, 3000);
 
 const SLOTS = 8;
 // dawne kolory (pierwsza wersja) → miejsce w nowej palecie
-const LEGACY = { "#D9480F": 1, "#1C7ED6": 0, "#2B8A3E": 5, "#7048E8": 6, "#C2255C": 4, "#0C8599": 2, "#E67700": 3, "#8B5E34": 7 };
+const LEGACY_COLORS = { "#D9480F": 1, "#1C7ED6": 0, "#2B8A3E": 5, "#7048E8": 6, "#C2255C": 4, "#0C8599": 2, "#E67700": 3, "#8B5E34": 7 };
 const ONCE = "_once";
 const WINDOW_DAYS = 30;
 const SUGGESTIONS = ["Zmywanie naczyń","Odkurzanie","Wyprowadzenie psa","Pranie","Rozwieszenie prania","Podlewanie kwiatów","Zakupy","Gotowanie obiadu","Nakrycie do stołu","Sprzątanie łazienki","Ścielenie łóżka","Karmienie kota","Mycie okien","Prasowanie","Wycieranie kurzu"];
 const DAY_ABBR = ["Nd","Pn","Wt","Śr","Cz","Pt","So"];
-// Zestaw czynności dodawany do bazy jeden raz (znacznik w meta/…), żeby usunięte później nie wracały.
-const SEED_ID = "czynnosci-2026-10-26";
+// Zestaw czynności na start (nowe rodziny dostają go od razu; przy przenosinach dopisywany do istniejących)
 const SEED = [
   ["wstawienie-prania", "Wstawienie prania", "washer"],
   ["rozwieszenie-prania-suszarka", "Rozwieszenie prania i wstawienie suszarki", "hanger"],
@@ -60,7 +57,7 @@ const $ = s => document.querySelector(s);
 const esc = s => String(s).replace(/[&<>"']/g, c => ({ "&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;" }[c]));
 const clean = (s, max) => String(s == null ? "" : s).replace(/\s+/g, " ").trim().slice(0, max);
 // porównywanie nazw bez wielkości liter i polskich znaków („wstawienie prania” = „Wstawienie prania”)
-const norm = s => String(s || "").toLowerCase().replace(/ł/g, "l").normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/\s+/g, " ").trim();
+const norm = s => String(s || "").toLowerCase().replace(/ł/g, "l").normalize("NFD").replace(/[̀-ͯ]/g, "").replace(/\s+/g, " ").trim();
 const cleanNote = s => String(s == null ? "" : s).replace(/[\r\n]+/g, " ").trim().slice(0, 200);
 const pad = n => String(n).padStart(2, "0");
 const keyOf = d => d.getFullYear() + "-" + pad(d.getMonth() + 1) + "-" + pad(d.getDate());
@@ -80,6 +77,15 @@ function countBy(arr, k) { const o = {}; for (const x of arr) o[x[k]] = (o[x[k]]
 function busy(el) { const a = document.activeElement; return !!(a && a.tagName === "INPUT" && el.contains(a)); }
 function hashSlot(id) { let h = 0; for (const ch of String(id)) h = (h * 31 + ch.charCodeAt(0)) >>> 0; return h % SLOTS; }
 
+// ---------- konta rodzin: nazwa rodziny + 4-cyfrowy PIN
+const DOMAIN = "@" + firebaseConfig.authDomain;
+const LEGACY_EMAIL = "rodzina" + DOMAIN;                 // poprzednia wersja: jedno wspólne konto z hasłem
+const slugOf = name => norm(name).replace(/[^a-z0-9]+/g, "-").replace(/^-+|-+$/g, "").slice(0, 40);
+const famEmail = slug => "r." + slug + DOMAIN;
+const pinPass = pin => "dyzury-" + pin;                  // Firebase wymaga co najmniej 6 znaków
+const isFamEmail = e => typeof e === "string" && e.startsWith("r.") && e.endsWith(DOMAIN);
+const PIN_RE = /^\d{4}$/;
+
 function avatar(m, size) {
   const ch = (m.name.trim().charAt(0) || "?").toUpperCase();
   return '<span class="av' + (size ? " " + size : "") + '" style="' + cvar(m.slot) + '" aria-hidden="true">' + esc(ch) + "</span>";
@@ -97,11 +103,12 @@ function tally(n, slot) {
 }
 
 /* ---------- stan ---------- */
+let famId = null, famName = "";
 let members = [], chores = [], ENT = [];
 let ghostM = {}, ghostC = {};          // osoby i czynności usunięte z list, ale obecne w dawnych wpisach
 const loaded = { members: false, chores: false, entries: false };
 let unsubs = [], unsubEntries = null;
-let selected = lsGet("dd.member");
+let selected = null;
 let when = "today";
 let tab = ["zglos", "wyniki"].includes(location.hash.slice(1)) ? location.hash.slice(1) : (lsGet("dd.tab") === "wyniki" ? "wyniki" : "zglos");
 let range = lsGet("dd.range") === "30" ? 30 : 7;
@@ -109,10 +116,14 @@ let todayK = keyOf(new Date());
 let showAllHist = false, addingChore = false, tilesSig = "";
 let newIcon = "check", newIconManual = false;     // wybór ikonki w formularzu „Inna czynność”
 let mIcon = "check", mIconManual = false;         // wybór ikonki w Ustawieniach
-let iconEdit = null, editNote = null;
+let iconEdit = null, editNote = null, editMember = null;
 let swatch = null, toastAction = null, toastTimer = null;
 let flashId = null, flashAt = 0;
-let signedIn = false;
+
+// ścieżki danych bieżącej rodziny
+const fcol = name => collection(fs, "families", famId, name);
+const fdoc = (name, id) => doc(fs, "families", famId, name, id);
+const newId = () => doc(collection(fs, "families")).id;
 
 const ready = () => loaded.members && loaded.chores && loaded.entries;
 function memberOf(id) { return members.find(m => m.id === id) || ghostM[id] || { id, name: "Usunięta osoba", slot: 7, order: 1e15 }; }
@@ -132,7 +143,7 @@ function seriesFor(es) {
 
 function parseMember(d) {
   const x = d.data(); if (!x || typeof x.name !== "string") return null;
-  const legacy = LEGACY[String(x.color || "").toUpperCase()];
+  const legacy = LEGACY_COLORS[String(x.color || "").toUpperCase()];
   const slot = validSlot(x.slot) ? x.slot : (legacy != null ? legacy : hashSlot(d.id));
   return { id: d.id, name: clean(x.name, 30) || "Bez imienia", slot, order: Number.isFinite(x.order) ? x.order : 0 };
 }
@@ -143,7 +154,7 @@ function parseChore(d) {
 function parseEntry(d) {
   const x = d.data();
   if (!x || typeof x.m !== "string" || typeof x.c !== "string" || typeof x.day !== "string" || !Number.isFinite(x.t)) return null;
-  const legacy = LEGACY[String(x.mc || "").toUpperCase()];
+  const legacy = LEGACY_COLORS[String(x.mc || "").toUpperCase()];
   return { id: d.id, m: x.m, c: x.c, day: x.day, t: x.t, mn: clean(x.mn, 30),
     ms: validSlot(x.ms) ? x.ms : (legacy != null ? legacy : hashSlot(x.m)),
     cn: clean(x.cn, 80), ci: typeof x.ci === "string" ? x.ci : null, once: x.once === true || x.c === ONCE, d: cleanNote(x.d) };
@@ -169,6 +180,12 @@ function renderHeader() {
   const s = new Intl.DateTimeFormat("pl-PL", { weekday: "long", day: "numeric", month: "long" }).format(new Date());
   $("#today-label").textContent = s.charAt(0).toUpperCase() + s.slice(1);
   $("#ver").textContent = "wersja " + BUILD;
+}
+function renderFam() {
+  $("#fam-label").textContent = famName ? "Rodzina: " + famName : "";
+  $("#fam-info").textContent = famName
+    ? "Domownicy logują się nazwą „" + famName + "” i Waszym 4-cyfrowym PIN-em."
+    : "Domownicy logują się nazwą rodziny i Waszym 4-cyfrowym PIN-em.";
 }
 function renderTabs() {
   for (const t of ["zglos", "wyniki"]) {
@@ -492,14 +509,25 @@ function bindTip(node, getData, highlight) {
 document.addEventListener("pointerdown", e => { if (tipOwner && !tipOwner.node.contains(e.target)) hideTip(); }, true);
 window.addEventListener("scroll", () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
 let resizeT = null;
-window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (tab === "wyniki" && ready()) { const keys = keysFor(range), es = entriesIn(keys); renderDaily(keys, es, seriesFor(es)); } }, 150); });
+window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (famId && tab === "wyniki" && ready()) { const keys = keysFor(range), es = entriesIn(keys); renderDaily(keys, es, seriesFor(es)); } }, 150); });
 
 /* ---------- Ustawienia ---------- */
+function memberRow(m) {
+  if (editMember === m.id) {
+    return '<li class="mrow"><form class="edit-form" data-form="rename-m" data-id="' + esc(m.id) + '" autocomplete="off">' + avatar(m) +
+      '<input maxlength="30" aria-label="Nowe imię: ' + esc(m.name) + '" value="' + esc(m.name) + '">' +
+      '<div class="row"><button class="btn primary sm" type="submit">Zapisz</button><button type="button" class="btn ghost sm" data-action="rename-cancel">Anuluj</button></div></form></li>';
+  }
+  return '<li class="mrow">' + avatar(m) + '<span class="nm">' + esc(m.name) + "</span>" +
+    '<button type="button" class="btn ghost sm" data-action="rename-m" data-id="' + esc(m.id) + '">Zmień imię</button>' +
+    '<button type="button" class="btn ghost sm" data-action="del-m" data-id="' + esc(m.id) + '">Usuń</button></li>';
+}
 function renderManage() {
   const ml = $("#m-list"), cl = $("#c-list");
-  if (!loaded.members) ml.innerHTML = '<li class="mrow muted">Wczytywanie…</li>';
-  else ml.innerHTML = (members.length ? "" : '<li class="mrow muted">Nikogo jeszcze nie ma.</li>') +
-    members.map(m => '<li class="mrow">' + avatar(m) + '<span class="nm">' + esc(m.name) + '</span><button type="button" class="btn ghost sm" data-action="del-m" data-id="' + esc(m.id) + '">Usuń</button></li>').join("");
+  if (!busy(ml)) {
+    if (!loaded.members) ml.innerHTML = '<li class="mrow muted">Wczytywanie…</li>';
+    else ml.innerHTML = (members.length ? "" : '<li class="mrow muted">Nikogo jeszcze nie ma.</li>') + members.map(memberRow).join("");
+  }
   if (!loaded.chores) cl.innerHTML = '<li class="mrow muted">Wczytywanie…</li>';
   else cl.innerHTML = (chores.length ? "" : '<li class="mrow muted">Brak czynności.</li>') +
     chores.map(c => '<li class="mrow"><button type="button" class="icbtn" data-action="chg-icon" data-id="' + esc(c.id) + '" aria-expanded="' + (iconEdit === c.id) + '" aria-label="Zmień ikonkę: ' + esc(c.name) + '">' + iconSvg(choreIcon(c)) + '</button><span class="nm">' + esc(c.name) + '</span><button type="button" class="btn ghost sm" data-action="del-c" data-id="' + esc(c.id) + '">Usuń</button></li>' +
@@ -537,15 +565,13 @@ function handleErr(e) {
 }
 
 /* ---------- zapis ---------- */
-const newId = col => doc(collection(fs, col)).id;
-
 // zapisuje wykonanie: chore = {id, name, icon} albo jednorazowa {once:true, name, icon}
 function logEntry(chore) {
   if (!selected) { toast("Najpierw wybierz, kto to zrobił.", null, "err"); return false; }
   const m = memberOf(selected);
   const d = new Date();
   if (when === "yesterday") d.setDate(d.getDate() - 1);
-  const day = keyOf(d), id = newId("entries");
+  const day = keyOf(d), id = newId();
   const note = cleanNote($("#note").value);
   const data = { m: m.id, mn: m.name, ms: m.slot, c: chore.once ? ONCE : chore.id, cn: chore.name, ci: chore.icon || guessIcon(chore.name), day, t: d.getTime() };
   if (chore.once) data.once = true;
@@ -556,10 +582,11 @@ function logEntry(chore) {
     if (btn) { btn.classList.remove("flash"); void btn.offsetWidth; btn.classList.add("flash"); }
   }
   $("#note").value = "";
+  const ref = fdoc("entries", id);
   toast(m.name + ": " + chore.name + (when === "yesterday" ? " (wczoraj)" : ""), { label: "Cofnij", fn: () => {
-    deleteDoc(doc(fs, "entries", id)).then(() => toast("Cofnięto wpis.")).catch(handleErr);
+    deleteDoc(ref).then(() => toast("Cofnięto wpis.")).catch(handleErr);
   } });
-  setDoc(doc(fs, "entries", id), data).catch(handleErr);
+  setDoc(ref, data).catch(handleErr);
   return true;
 }
 
@@ -569,8 +596,16 @@ async function addMember(raw) {
   if (members.some(m => norm(m.name) === norm(name))) { toast(name + " już jest na liście."); return false; }
   const used = new Set(members.map(m => m.slot));
   const slot = (swatch != null && !used.has(swatch)) ? swatch : ([...Array(SLOTS).keys()].find(s => !used.has(s)) ?? (members.length % SLOTS));
-  setDoc(doc(fs, "members", newId("members")), { name, slot, order: Date.now() }).catch(handleErr);
+  setDoc(fdoc("members", newId()), { name, slot, order: Date.now() }).catch(handleErr);
   toast("Dodano: " + name);
+  return true;
+}
+function renameMember(id, raw) {
+  const name = clean(raw, 30), m = members.find(x => x.id === id);
+  if (!m) return true;
+  if (!name) { toast("Imię nie może być puste.", null, "err"); return false; }
+  if (members.some(x => x.id !== id && norm(x.name) === norm(name))) { toast(name + " już jest na liście.", null, "err"); return false; }
+  if (name !== m.name) { updateDoc(fdoc("members", id), { name }).then(() => toast("Zmieniono imię na: " + name)).catch(handleErr); }
   return true;
 }
 function addChore(raw, icon) {
@@ -578,17 +613,22 @@ function addChore(raw, icon) {
   if (!name) return null;
   const existing = chores.find(c => norm(c.name) === norm(name));
   if (existing) return existing;
-  const ch = { id: newId("chores"), name, icon: icon || guessIcon(name) };
-  setDoc(doc(fs, "chores", ch.id), { name, icon: ch.icon, order: Date.now() }).catch(handleErr);
+  const ch = { id: newId(), name, icon: icon || guessIcon(name) };
+  setDoc(fdoc("chores", ch.id), { name, icon: ch.icon, order: Date.now() }).catch(handleErr);
   return ch;
 }
 
+// drugie dotknięcie w ciągu 3 s potwierdza akcję
 function confirmThen(btn, label, fn) {
-  if (btn.dataset.confirm) { fn(); return; }
-  btn.dataset.confirm = "1";
-  const old = btn.textContent;
+  if (btn.dataset.confirm) { resetConfirm(btn); fn(); return; }
+  btn.dataset.confirm = String(Date.now()); btn.dataset.label = btn.textContent;
   btn.textContent = label; btn.classList.add("warn");
-  setTimeout(() => { if (btn.isConnected && btn.dataset.confirm) { delete btn.dataset.confirm; btn.textContent = old; btn.classList.remove("warn"); } }, 3000);
+  const stamp = btn.dataset.confirm;
+  setTimeout(() => { if (btn.isConnected && btn.dataset.confirm === stamp) resetConfirm(btn); }, 3000);
+}
+function resetConfirm(btn) {
+  if (btn.dataset.label) btn.textContent = btn.dataset.label;
+  delete btn.dataset.confirm; delete btn.dataset.label; btn.classList.remove("warn");
 }
 
 /* ---------- arkusz ustawień ---------- */
@@ -601,7 +641,8 @@ function openManage() {
   $("#manage-h").focus();
 }
 function closeManage() {
-  $("#manage").hidden = true; iconEdit = null;
+  if ($("#manage").hidden) return;
+  $("#manage").hidden = true; iconEdit = null; editMember = null;
   document.documentElement.style.overflow = "";
   if (lastFocus && lastFocus.focus) lastFocus.focus();
 }
@@ -613,13 +654,14 @@ function setTab(t) {
   if (t === "wyniki") renderResults();
   window.scrollTo({ top: 0 });
 }
+function logout() { closeManage(); signOut(auth); }
 
 /* ---------- zdarzenia ---------- */
 document.addEventListener("click", e => {
   const b = e.target.closest("[data-action]");
   if (!b) return;
   const a = b.dataset.action, id = b.dataset.id;
-  if (a === "pick") { selected = id; lsSet("dd.member", selected); renderWho(); renderTiles(); }
+  if (a === "pick") { selected = id; lsSet("dd.member." + famId, selected); renderWho(); renderTiles(); }
   else if (a === "tab") { setTab(b.dataset.tab); }
   else if (a === "when") { when = b.dataset.when; renderSegs(); }
   else if (a === "range") { range = Number(b.dataset.range) === 30 ? 30 : 7; lsSet("dd.range", String(range)); showAllHist = false; renderSegs(); renderResults(); }
@@ -629,25 +671,36 @@ document.addEventListener("click", e => {
   else if (a === "tile-icon") { newIcon = b.dataset.icon; newIconManual = true; markPicker($("#tile-icons"), newIcon); }
   else if (a === "m-icon") { mIcon = b.dataset.icon; mIconManual = true; markPicker($("#c-icons"), mIcon); }
   else if (a === "chg-icon") { iconEdit = iconEdit === id ? null : id; renderManage(); }
-  else if (a === "set-icon") { const ic = b.dataset.icon; iconEdit = null; updateDoc(doc(fs, "chores", id), { icon: ic }).catch(handleErr); renderManage(); }
+  else if (a === "set-icon") { const ic = b.dataset.icon; iconEdit = null; updateDoc(fdoc("chores", id), { icon: ic }).catch(handleErr); renderManage(); }
+  else if (a === "rename-m") { editMember = id; renderManage(); const i = $('#m-list form[data-form="rename-m"] input'); if (i) { i.focus(); i.select(); } }
+  else if (a === "rename-cancel") { editMember = null; if (document.activeElement) document.activeElement.blur(); renderManage(); }
   else if (a === "open-manage") { openManage(); }
   else if (a === "close-manage") { closeManage(); }
   else if (a === "toast-act") { const f = toastAction; toastAction = null; $("#toast").hidden = true; if (f) f(); }
-  else if (a === "del") { confirmThen(b, "Na pewno?", () => { deleteDoc(doc(fs, "entries", id)).then(() => toast("Usunięto wpis.")).catch(handleErr); }); }
+  else if (a === "del") { confirmThen(b, "Na pewno?", () => { deleteDoc(fdoc("entries", id)).then(() => toast("Usunięto wpis.")).catch(handleErr); }); }
   else if (a === "note") { editNote = id; renderRecent(); renderResults(); const f = $("#tab-" + tab).querySelector('form[data-form="note"][data-id="' + CSS.escape(id) + '"] input'); if (f) f.focus(); }
   else if (a === "note-cancel") { editNote = null; if (document.activeElement) document.activeElement.blur(); renderRecent(); renderResults(); }
   else if (a === "more-hist") { showAllHist = !showAllHist; renderResults(); }
   else if (a === "swatch") { swatch = Number(b.dataset.slot); renderManage(); }
-  else if (a === "del-m") { confirmThen(b, "Na pewno?", () => { deleteDoc(doc(fs, "members", id)).catch(handleErr); }); }
-  else if (a === "del-c") { confirmThen(b, "Na pewno?", () => { deleteDoc(doc(fs, "chores", id)).catch(handleErr); }); }
+  else if (a === "del-m") { confirmThen(b, "Na pewno?", () => { deleteDoc(fdoc("members", id)).catch(handleErr); }); }
+  else if (a === "del-c") { confirmThen(b, "Na pewno?", () => { deleteDoc(fdoc("chores", id)).catch(handleErr); }); }
   else if (a === "sugg") { const name = b.dataset.name; if (addChore(name)) toast("Dodano czynność: " + name); }
   else if (a === "copy-url") { copyUrl(b); }
-  else if (a === "logout") { closeManage(); signOut(auth); }
+  else if (a === "logout") { confirmThen(b, "Na pewno?", logout); }
+  else if (a === "login-mode") { setLoginMode(b.dataset.mode); }
+  else if (a === "legacy-out") { signOut(auth); }
 });
 
 document.addEventListener("input", e => {
-  if (e.target.id === "tile-chore" && !newIconManual) { newIcon = guessIcon(e.target.value); const p = $("#tile-icons"); if (p) markPicker(p, newIcon); }
-  if (e.target.id === "c-name" && !mIconManual) { mIcon = guessIcon(e.target.value); markPicker($("#c-icons"), mIcon); }
+  const t = e.target;
+  if (t.id === "tile-chore" && !newIconManual) { newIcon = guessIcon(t.value); const p = $("#tile-icons"); if (p) markPicker(p, newIcon); }
+  if (t.id === "c-name" && !mIconManual) { mIcon = guessIcon(t.value); markPicker($("#c-icons"), mIcon); }
+  if (t.classList && t.classList.contains("pin")) {
+    const v = t.value.replace(/\D/g, "").slice(0, 4);
+    if (v !== t.value) t.value = v;
+    // logowanie: po wpisaniu 4. cyfry od razu wchodzimy
+    if (t.id === "pin" && loginMode === "login" && v.length === 4 && clean($("#fam-name").value, 30)) $("#login-form").requestSubmit();
+  }
 });
 
 document.addEventListener("submit", async e => {
@@ -658,6 +711,8 @@ document.addEventListener("submit", async e => {
   if (kind === "member" || kind === "quick-member") {
     if (await addMember(val) && input) input.value = "";
     if (kind === "quick-member" && input) input.blur();
+  } else if (kind === "rename-m") {
+    if (renameMember(f.dataset.id, val)) { editMember = null; if (input) input.blur(); renderManage(); }
   } else if (kind === "chore") {
     const name = clean(val, 80); if (!name) return;
     if (chores.some(c => norm(c.name) === norm(name))) { toast("„" + name + "” już jest na liście."); return; }
@@ -675,10 +730,10 @@ document.addEventListener("submit", async e => {
     const id = f.dataset.id, d = cleanNote(val);
     if (input) input.blur();
     editNote = null;
-    updateDoc(doc(fs, "entries", id), { d }).then(() => toast(d ? "Zapisano opis." : "Usunięto opis.")).catch(handleErr);
+    updateDoc(fdoc("entries", id), { d }).then(() => toast(d ? "Zapisano opis." : "Usunięto opis.")).catch(handleErr);
     renderRecent(); renderResults();
-  } else if (kind === "pass") {
-    changePass(f);
+  } else if (kind === "pin") {
+    changePin(f);
   }
 });
 
@@ -693,85 +748,183 @@ async function copyUrl(btn) {
   catch (e) { const r = document.createRange(); r.selectNodeContents($("#app-url")); const s = getSelection(); s.removeAllRanges(); s.addRange(r); toast("Zaznaczyłem link, skopiuj go ręcznie."); }
 }
 
-/* ---------- logowanie ---------- */
+/* ---------- logowanie rodzin ---------- */
 const PL_ERR = {
-  "auth/invalid-credential": "Złe hasło rodziny.", "auth/invalid-login-credentials": "Złe hasło rodziny.",
-  "auth/wrong-password": "Złe hasło rodziny.", "auth/user-not-found": "Złe hasło rodziny.",
-  "auth/email-already-in-use": "Hasło rodziny jest już ustawione. Wpisz je, żeby wejść.",
-  "auth/weak-password": "Hasło musi mieć co najmniej 6 znaków.",
+  "auth/invalid-credential": "Zła nazwa rodziny albo PIN.", "auth/invalid-login-credentials": "Zła nazwa rodziny albo PIN.",
+  "auth/wrong-password": "Zła nazwa rodziny albo PIN.", "auth/user-not-found": "Zła nazwa rodziny albo PIN.",
+  "auth/email-already-in-use": "Rodzina o tej nazwie już istnieje. Wybierz inną nazwę albo się zaloguj.",
+  "app/name-taken": "Ta nazwa rodziny jest już zajęta. Wybierz inną.",
   "auth/too-many-requests": "Za dużo prób. Spróbuj za kilka minut.",
   "auth/network-request-failed": "Brak internetu. Sprawdź połączenie.",
-  "auth/operation-not-allowed": "Logowanie hasłem jest wyłączone w Firebase (Authentication → E-mail/hasło)."
+  "auth/operation-not-allowed": "Logowanie jest wyłączone w Firebase (Authentication → E-mail/hasło).",
+  "permission-denied": "Baza nie przyjęła danych. Wklej w Firebase nowe reguły (Firestore → Rules → Publish) i spróbuj jeszcze raz."
 };
-let createMode = false;
-function setLoginMode(create) {
-  createMode = create;
-  $("#login-h").textContent = create ? "Ustaw hasło rodziny" : "Wejdź";
-  $("#login-desc").textContent = create
-    ? "Robisz to tylko raz. Potem podaj to hasło domownikom, żeby weszli na swoich telefonach."
-    : "Wpisz hasło rodziny. Ten telefon je zapamięta.";
-  $("#pw2-box").hidden = !create;
-  $("#pw").autocomplete = create ? "new-password" : "current-password";
-  $("#login-btn").textContent = create ? "Ustaw hasło i wejdź" : "Wejdź";
-  $("#login-mode").textContent = create ? "Hasło już jest ustawione? Wejdź" : "Pierwsze uruchomienie? Ustaw hasło rodziny";
+const MODES = {
+  login: { h: "Zaloguj rodzinę", d: "Wpisz nazwę rodziny i jej 4-cyfrowy PIN. Ten telefon zapamięta logowanie.", f: ["name", "pin"], btn: "Zaloguj",
+    links: [["create", "Nowa rodzina? Załóż ją"], ["legacy", "Używaliście wcześniej hasła rodziny? Przenieś dane"]] },
+  create: { h: "Nowa rodzina", d: "Wybierz nazwę rodziny i 4-cyfrowy PIN. Podasz je domownikom, żeby zalogowali się na swoich telefonach.", f: ["name", "pin", "pin2"], btn: "Załóż rodzinę",
+    links: [["login", "Masz już rodzinę? Zaloguj się"]] },
+  legacy: { h: "Przenieś dane", d: "Wpisz hasło rodziny z poprzedniej wersji aplikacji.", f: ["old"], btn: "Dalej",
+    links: [["login", "Wróć do logowania"]] },
+  migrate: { h: "Ustawcie nazwę i PIN", d: "Aplikacja obsługuje teraz wiele rodzin. Wybierzcie nazwę rodziny i 4-cyfrowy PIN, a przeniosę do niej Waszych domowników, czynności i historię.", f: ["name", "pin", "pin2"], btn: "Przenieś dane i zaloguj",
+    links: [["legacy-out", "Wyloguj"]] },
+  wait: { h: "Chwileczkę…", d: "Sprawdzam dane rodziny.", f: [], btn: null, links: [] }
+};
+let loginMode = "login", loginNote = "", working = false;
+
+function setLoginMode(mode) {
+  loginMode = mode;
+  const M = MODES[mode];
+  $("#login-h").textContent = M.h;
+  $("#login-desc").textContent = (mode === "login" && loginNote) ? loginNote : M.d;
+  for (const [k, sel] of [["old", "#f-old"], ["name", "#f-name"], ["pin", "#f-pin"], ["pin2", "#f-pin2"]]) $(sel).hidden = !M.f.includes(k);
+  $("#pin").autocomplete = mode === "login" ? "current-password" : "new-password";
+  const btn = $("#login-btn"); btn.hidden = !M.btn; btn.textContent = M.btn || ""; btn.disabled = false;
+  $("#login-links").innerHTML = M.links.map(([m, label]) => m === "legacy-out"
+    ? '<button type="button" class="linkbtn" data-action="legacy-out">' + esc(label) + "</button>"
+    : '<button type="button" class="linkbtn' + (m === "legacy" ? " small" : "") + '" data-action="login-mode" data-mode="' + m + '">' + esc(label) + "</button>").join("");
   $("#login-err").hidden = true;
+  if (M.f.includes("name") && !$("#fam-name").value) $("#fam-name").value = lsGet("dd.family") || "";
+  $("#pin").value = ""; $("#pin2").value = ""; $("#old-pass").value = "";
 }
-$("#login-mode").addEventListener("click", () => setLoginMode(!createMode));
+function loginError(msg) { const err = $("#login-err"); err.textContent = msg; err.hidden = false; }
+function showLogin(mode) {
+  $("#app").hidden = true; $("#login").hidden = false;
+  setLoginMode(mode);
+}
+
 $("#login-form").addEventListener("submit", async e => {
   e.preventDefault();
-  const pw = $("#pw").value, err = $("#login-err"), btn = $("#login-btn");
-  err.hidden = true;
-  if (pw.length < 6) { err.textContent = "Hasło musi mieć co najmniej 6 znaków."; err.hidden = false; return; }
-  if (createMode && pw !== $("#pw2").value) { err.textContent = "Hasła się różnią."; err.hidden = false; return; }
-  btn.disabled = true;
+  if (working) return;
+  const btn = $("#login-btn");
+  $("#login-err").hidden = true;
+  const name = clean($("#fam-name").value, 30), pin = $("#pin").value, pin2 = $("#pin2").value;
+  const M = MODES[loginMode];
+  if (M.f.includes("name") && slugOf(name).length < 2) return loginError("Nazwa rodziny musi mieć co najmniej 2 litery lub cyfry.");
+  if (M.f.includes("pin") && !PIN_RE.test(pin)) return loginError("PIN musi mieć dokładnie 4 cyfry.");
+  if (M.f.includes("pin2") && pin !== pin2) return loginError("PIN-y się różnią.");
+  working = true; btn.disabled = true;
+  const label = btn.textContent;
   try {
-    if (createMode) {
-      await createUserWithEmailAndPassword(auth, FAMILY_EMAIL, pw);
-      // pierwsze czynności na start (można je usunąć w Ustawieniach)
-      setDoc(doc(fs, "chores", "zmywarka"), { name: "Rozładowanie zmywarki", icon: "dishwasher", order: 1 }).catch(handleErr);
-      setDoc(doc(fs, "chores", "smieci"), { name: "Wyniesienie śmieci", icon: "trash", order: 2 }).catch(handleErr);
-    } else await signInWithEmailAndPassword(auth, FAMILY_EMAIL, pw);
-    $("#pw").value = ""; $("#pw2").value = "";
+    if (loginMode === "login") {
+      lsSet("dd.family", name);
+      await signInWithEmailAndPassword(auth, famEmail(slugOf(name)), pinPass(pin));
+    } else if (loginMode === "create") {
+      btn.textContent = "Zakładam…";
+      await createFamily(name, pin);
+    } else if (loginMode === "legacy") {
+      await signInWithEmailAndPassword(auth, LEGACY_EMAIL, $("#old-pass").value);
+    } else if (loginMode === "migrate") {
+      btn.textContent = "Przenoszę dane…";
+      await migrate(name, pin);
+    }
   } catch (ex) {
-    if (ex.code === "auth/email-already-in-use") setLoginMode(false);
-    err.textContent = PL_ERR[ex.code] || ("Błąd: " + ex.message); err.hidden = false;
-  } finally { btn.disabled = false; }
+    console.warn(ex);
+    const code = ex && ex.code;
+    if (loginMode === "legacy" && /credential|password|user-not-found/.test(code || "")) loginError("Złe hasło.");
+    else loginError(PL_ERR[code] || ("Błąd: " + (ex && ex.message || ex)));
+    if (btn.isConnected && !btn.hidden) { btn.disabled = false; btn.textContent = label; }
+  } finally { working = false; }
 });
 
-async function changePass(form) {
-  const oldP = $("#old-pw").value, newP = $("#new-pw").value;
-  if (newP.length < 6) { toast("Nowe hasło musi mieć co najmniej 6 znaków.", null, "err"); return; }
-  try {
-    await reauthenticateWithCredential(auth.currentUser, EmailAuthProvider.credential(FAMILY_EMAIL, oldP));
-    await updatePassword(auth.currentUser, newP);
-    form.reset();
-    toast("Hasło rodziny zmienione.");
-  } catch (ex) { toast(PL_ERR[ex.code] || ("Nie udało się zmienić hasła: " + ex.message), null, "err"); }
+// dzieli zapisy na partie (Firestore przyjmuje do 500 zmian naraz)
+function batcher(store) {
+  let b = writeBatch(store), n = 0; const done = [];
+  return {
+    set(ref, data) { b.set(ref, data); if (++n >= 400) { done.push(b.commit()); b = writeBatch(store); n = 0; } },
+    async flush() { if (n) done.push(b.commit()); await Promise.all(done); }
+  };
+}
+// dopisuje zestaw startowy do listy czynności; ta sama nazwa (bez względu na polskie znaki) dostaje tylko poprawną nazwę i ikonkę
+function withStarter(list) {
+  const out = list.map(c => ({ id: c.id, data: Object.assign({}, c.data) }));
+  const byName = new Map(out.map(c => [norm(c.data.name), c]));
+  const base = Date.now();
+  SEED.forEach(([id, name, icon], i) => {
+    const same = byName.get(norm(name));
+    if (same) { same.data.name = name; same.data.icon = icon; }
+    else if (!out.some(c => c.id === id)) out.push({ id, data: { name, icon, order: base + i } });
+  });
+  return out;
 }
 
-/* ---------- jednorazowe dodanie zestawu czynności ---------- */
-let seedTried = false;
-async function runSeed() {
-  if (seedTried) return; seedTried = true;
+async function createFamily(name, pin) {
+  const slug = slugOf(name);
+  lsSet("dd.family", name);
+  const cred = await createUserWithEmailAndPassword(auth, famEmail(slug), pinPass(pin));
+  const fid = cred.user.uid, w = batcher(fs);
+  w.set(doc(fs, "families", fid), { name, slug, createdAt: Date.now() });
+  withStarter([]).forEach(c => w.set(doc(fs, "families", fid, "chores", c.id), c.data));
+  await w.flush();
+}
+
+// Przeniesienie danych z poprzedniej wersji (jedno wspólne konto) do nowej rodziny.
+async function migrate(name, pin) {
+  const slug = slugOf(name), email = famEmail(slug), pw = pinPass(pin);
+  const readAll = async c => (await getDocsFromServer(collection(fs, c))).docs.map(d => ({ id: d.id, data: d.data() }));
+  const [mem, cho, ent] = await Promise.all([readAll("members"), readAll("chores"), readAll("entries")]);
+  const met = await readAll("meta").catch(() => []);
+  // konto rodziny zakładamy w osobnej instancji, żeby stare konto zostało zalogowane do końca przenosin
+  const sec = initializeApp(firebaseConfig, "przenosiny-" + Date.now());
   try {
-    const mark = await getDocFromServer(doc(fs, "meta", SEED_ID));
-    if (mark.exists()) return;
-    const snap = await getDocsFromServer(collection(fs, "chores"));
-    const have = new Map(snap.docs.map(d => [norm(d.data().name), d]));
-    const batch = writeBatch(fs), base = Date.now();
-    let added = 0;
-    SEED.forEach(([id, name, icon], i) => {
-      const same = have.get(norm(name));
-      // taka czynność już jest (np. wpisana bez polskich znaków) → tylko poprawiamy nazwę i ikonkę
-      if (same) { batch.update(same.ref, { name, icon }); return; }
-      batch.set(doc(fs, "chores", id), { name, icon, order: base + i }); added++;
-    });
-    batch.set(doc(fs, "meta", SEED_ID), { at: base, added });
-    await batch.commit();
-    if (added) toast("Dodano " + added + " " + (added === 1 ? "nową czynność" : (added % 10 >= 2 && added % 10 <= 4 && (added % 100 < 12 || added % 100 > 14) ? "nowe czynności" : "nowych czynności")) + ".");
-  } catch (e) {
-    console.warn("zestaw czynności:", e);
-    if (e && e.code === "permission-denied") showNotice("Żeby pojawiły się nowe czynności, wklej w Firebase najnowsze reguły bazy (Firestore → Rules → Publish) i odśwież stronę.");
+    const sAuth = initializeAuth(sec, { persistence: inMemoryPersistence }), sFs = getFirestore(sec);
+    let cred;
+    try { cred = await createUserWithEmailAndPassword(sAuth, email, pw); }
+    catch (ex) {
+      if (!ex || ex.code !== "auth/email-already-in-use") throw ex;
+      // przerwane wcześniej przenosiny: ta sama nazwa i PIN → kończymy je
+      try { cred = await signInWithEmailAndPassword(sAuth, email, pw); } catch (e2) { throw { code: "app/name-taken" }; }
+      const f = await getDoc(doc(sFs, "families", cred.user.uid));
+      if (f.exists() && f.data().legacy !== true) throw { code: "app/name-taken" };
+    }
+    const fid = cred.user.uid;
+    await setDoc(doc(sFs, "families", fid), { name, slug, createdAt: Date.now(), legacy: true, complete: false }, { merge: true });
+    const w = batcher(sFs);
+    mem.forEach(x => w.set(doc(sFs, "families", fid, "members", x.id), x.data));
+    withStarter(cho).forEach(x => w.set(doc(sFs, "families", fid, "chores", x.id), x.data));
+    ent.forEach(x => w.set(doc(sFs, "families", fid, "entries", x.id), x.data));
+    met.filter(x => x.id !== "migrated").forEach(x => w.set(doc(sFs, "families", fid, "meta", x.id), x.data));
+    await w.flush();
+    await updateDoc(doc(sFs, "families", fid), { complete: true });
+    // znacznik w starej bazie: inne telefony zalogowane starym hasłem dowiedzą się, gdzie są dane
+    await setDoc(doc(fs, "meta", "migrated"), { name, slug, at: Date.now() });
+    await signOut(sAuth);
+  } finally { deleteApp(sec).catch(() => {}); }
+  lsSet("dd.family", name);
+  migrating = true;
+  try { await signOut(auth); await signInWithEmailAndPassword(auth, email, pw); }
+  finally { migrating = false; }
+}
+
+// telefon zalogowany jeszcze starym hasłem
+async function showLegacy() {
+  showLogin("wait");
+  try {
+    const m = await getDocFromServer(doc(fs, "meta", "migrated"));
+    if (m.exists()) {
+      const nm = clean(m.data().name, 30);
+      lsSet("dd.family", nm);
+      loginNote = "Wasze dane są już w rodzinie „" + nm + "”. Zalogujcie się jej nazwą i PIN-em.";
+      $("#fam-name").value = nm;
+      await signOut(auth);
+      return;
+    }
+  } catch (e) { console.warn("sprawdzanie przenosin:", e); }
+  if (auth.currentUser && auth.currentUser.email === LEGACY_EMAIL) setLoginMode("migrate");
+}
+
+async function changePin(form) {
+  const oldP = $("#old-pin").value, newP = $("#new-pin").value, u = auth.currentUser;
+  if (!PIN_RE.test(newP)) { toast("Nowy PIN musi mieć dokładnie 4 cyfry.", null, "err"); return; }
+  if (!u) return;
+  try {
+    await reauthenticateWithCredential(u, EmailAuthProvider.credential(u.email, pinPass(oldP)));
+    await updatePassword(u, pinPass(newP));
+    form.reset();
+    toast("PIN rodziny zmieniony.");
+  } catch (ex) {
+    const code = ex && ex.code;
+    toast(/credential|password/.test(code || "") ? "Obecny PIN jest nieprawidłowy." : (PL_ERR[code] || "Nie udało się zmienić PIN-u."), null, "err");
   }
 }
 
@@ -779,19 +932,25 @@ async function runSeed() {
 function subErr(e) {
   console.warn(e);
   showNotice(e && e.code === "permission-denied"
-    ? "Baza odmówiła dostępu. Sprawdź, czy reguły Firestore są wklejone, albo zaloguj się ponownie."
+    ? "Baza odmówiła dostępu. Sprawdź, czy w Firebase są wklejone najnowsze reguły, albo zaloguj się ponownie."
     : "Połączenie z bazą zostało przerwane. Odśwież stronę.");
 }
 function subEntries() {
   if (unsubEntries) unsubEntries();
-  unsubEntries = onSnapshot(query(collection(fs, "entries"), where("day", ">=", keysFor(WINDOW_DAYS)[0])), s => {
+  unsubEntries = onSnapshot(query(fcol("entries"), where("day", ">=", keysFor(WINDOW_DAYS)[0])), s => {
     ENT = s.docs.map(parseEntry).filter(Boolean).sort((a, b) => b.t - a.t);
     rebuildGhosts(); loaded.entries = true; renderAll();
   }, subErr);
 }
 function subscribe() {
-  unsubs.push(onSnapshot(collection(fs, "members"), s => { members = s.docs.map(parseMember).filter(Boolean).sort(byOrder); loaded.members = true; renderAll(); }, subErr));
-  unsubs.push(onSnapshot(collection(fs, "chores"), s => { chores = s.docs.map(parseChore).filter(Boolean).sort(byOrder); loaded.chores = true; renderAll(); }, subErr));
+  unsubs.push(onSnapshot(doc(fs, "families", famId), s => {
+    const x = s.exists() ? s.data() : null;
+    famName = x && typeof x.name === "string" ? clean(x.name, 30) : "";
+    if (famName) lsSet("dd.family", famName);
+    renderFam();
+  }, subErr));
+  unsubs.push(onSnapshot(fcol("members"), s => { members = s.docs.map(parseMember).filter(Boolean).sort(byOrder); loaded.members = true; renderAll(); }, subErr));
+  unsubs.push(onSnapshot(fcol("chores"), s => { chores = s.docs.map(parseChore).filter(Boolean).sort(byOrder); loaded.chores = true; renderAll(); }, subErr));
   subEntries();
 }
 function unsubscribeAll() {
@@ -801,24 +960,36 @@ function unsubscribeAll() {
   loaded.members = loaded.chores = loaded.entries = false; tilesSig = "";
 }
 
+function startSession(user) {
+  if (famId === user.uid) return;
+  endSession();
+  famId = user.uid; famName = ""; loginNote = "";
+  selected = lsGet("dd.member." + famId);
+  editNote = null; editMember = null; iconEdit = null; addingChore = false; showAllHist = false;
+  $("#login").hidden = true; $("#app").hidden = false;
+  showNotice("");
+  renderHeader(); renderSegs(); renderTabs(); renderFam(); renderAll(); subscribe();
+}
+function endSession() {
+  if (!famId) return;
+  unsubscribeAll(); closeManage(); hideTip();
+  famId = null; famName = ""; selected = null;
+  $("#app").hidden = true;
+}
+
 function checkDay() {
   const k = keyOf(new Date());
-  if (k !== todayK) { todayK = k; renderHeader(); if (signedIn) subEntries(); renderAll(); }
+  if (k !== todayK) { todayK = k; renderHeader(); if (famId) { subEntries(); renderAll(); } }
 }
 setInterval(checkDay, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkDay(); checkUpdate(); } });
 
+let migrating = false;
 onAuthStateChanged(auth, user => {
-  const ok = !!user && user.email === FAMILY_EMAIL;
-  if (user && !ok) { signOut(auth); return; }
-  if (ok && !signedIn) {
-    signedIn = true;
-    $("#login").hidden = true; $("#app").hidden = false;
-    showNotice("");
-    renderHeader(); renderSegs(); renderTabs(); renderAll(); subscribe(); runSeed();
-  } else if (!ok) {
-    signedIn = false; unsubscribeAll();
-    $("#app").hidden = true; $("#login").hidden = false;
-    setLoginMode(false);
-  }
+  if (user && isFamEmail(user.email)) { startSession(user); return; }
+  endSession();
+  if (user && user.email === LEGACY_EMAIL) { showLegacy(); return; }
+  if (user) { signOut(auth); return; }
+  if (migrating) { showLogin("wait"); return; }
+  showLogin(["create", "legacy"].includes(loginMode) && !loginNote ? loginMode : "login");
 });
