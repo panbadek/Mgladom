@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261026-212010">
+<link rel="manifest" href="manifest.json?v=20261026-212740">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -520,6 +520,15 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
       <p class="muted">Wyślij go domownikom razem z nazwą rodziny i PIN-em. Na Androidzie w Chrome: menu ⋮ → „Dodaj do ekranu głównego”, na iPhonie w Safari: Udostępnij → „Do ekranu początkowego”.</p>
       <div class="row" style="margin-top:6px"><span id="app-url" class="addr"></span><button type="button" class="btn ghost sm" data-action="copy-url">Kopiuj</button></div>
     </section>
+    <section aria-labelledby="mr-h" id="restore-sec">
+      <h3 id="mr-h">Dane z poprzedniej wersji</h3>
+      <p class="muted" style="font-size:14px">Jeśli przed wprowadzeniem PIN-ów używaliście wspólnego hasła rodziny, przeniesiesz tu tamtych domowników, czynności i historię. Osoby i czynności o tych samych nazwach zostaną połączone, nic się nie zdubluje.</p>
+      <form data-form="restore" class="stack" autocomplete="off">
+        <label class="lbl" for="restore-pass">Stare hasło rodziny</label>
+        <input id="restore-pass" type="password" autocomplete="current-password">
+        <button class="btn ghost" type="submit" id="restore-btn">Przywróć dane</button>
+      </form>
+    </section>
     <section aria-labelledby="mp-h">
       <h3 id="mp-h">Rodzina i PIN</h3>
       <p class="muted" id="fam-info"></p>
@@ -539,5 +548,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261026-212010"></script>
+<script type="module" src="app.js?v=20261026-212740"></script>
 </body></html>

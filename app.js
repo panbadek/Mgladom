@@ -5,10 +5,10 @@ import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signI
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDoc, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261026-212010";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-212010";
+import { firebaseConfig } from "./firebase-config.js?v=20261026-212740";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-212740";
 
-const BUILD = "20261026-212010";
+const BUILD = "20261026-212740";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -103,7 +103,7 @@ function tally(n, slot) {
 }
 
 /* ---------- stan ---------- */
-let famId = null, famName = "";
+let famId = null, famName = "", famHasOld = false;
 let members = [], chores = [], ENT = [];
 let ghostM = {}, ghostC = {};          // osoby i czynności usunięte z list, ale obecne w dawnych wpisach
 const loaded = { members: false, chores: false, entries: false };
@@ -182,6 +182,7 @@ function renderHeader() {
   $("#ver").textContent = "wersja " + BUILD;
 }
 function renderFam() {
+  $("#restore-sec").hidden = famHasOld;
   $("#fam-label").textContent = famName ? "Rodzina: " + famName : "";
   $("#fam-info").textContent = famName
     ? "Domownicy logują się nazwą „" + famName + "” i Waszym 4-cyfrowym PIN-em."
@@ -732,6 +733,8 @@ document.addEventListener("submit", async e => {
     editNote = null;
     updateDoc(fdoc("entries", id), { d }).then(() => toast(d ? "Zapisano opis." : "Usunięto opis.")).catch(handleErr);
     renderRecent(); renderResults();
+  } else if (kind === "restore") {
+    restoreLegacy(f);
   } else if (kind === "pin") {
     changePin(f);
   }
@@ -913,6 +916,58 @@ async function showLegacy() {
   if (auth.currentUser && auth.currentUser.email === LEGACY_EMAIL) setLoginMode("migrate");
 }
 
+// Przywrócenie danych z poprzedniej wersji (wspólne hasło) do rodziny, w której jesteśmy zalogowani.
+// Domownicy i czynności o tych samych nazwach są łączeni, a wpisy dostają ich identyfikatory.
+async function restoreLegacy(form) {
+  const pass = $("#restore-pass").value, btn = $("#restore-btn"), label = btn.textContent;
+  if (!pass) { toast("Wpisz stare hasło rodziny.", null, "err"); return; }
+  if (!famId) return;
+  btn.disabled = true; btn.textContent = "Przywracam…";
+  const sec = initializeApp(firebaseConfig, "przywracanie-" + Date.now());
+  try {
+    const sAuth = initializeAuth(sec, { persistence: inMemoryPersistence }), sFs = getFirestore(sec);
+    try { await signInWithEmailAndPassword(sAuth, LEGACY_EMAIL, pass); }
+    catch (ex) { throw { code: /credential|password|user-not-found/.test(ex && ex.code || "") ? "app/bad-old-pass" : (ex && ex.code) }; }
+    const readOld = async c => (await getDocsFromServer(collection(sFs, c))).docs.map(d => ({ id: d.id, data: d.data() }));
+    const readCur = async c => (await getDocsFromServer(fcol(c))).docs.map(d => ({ id: d.id, data: d.data() }));
+    const [oMem, oCho, oEnt, cMem, cCho] = await Promise.all([readOld("members"), readOld("chores"), readOld("entries"), readCur("members"), readCur("chores")]);
+    const merge = (oldList, curList) => {
+      const byName = new Map(curList.map(x => [norm(x.data.name), x.id])), map = {}, fresh = [];
+      for (const x of oldList) {
+        const key = norm(x.data && x.data.name), same = byName.get(key);
+        if (same) map[x.id] = same; else { map[x.id] = x.id; fresh.push(x); byName.set(key, x.id); }
+      }
+      return { map, fresh };
+    };
+    const M = merge(oMem, cMem), C = merge(oCho, cCho);
+    const w = batcher(fs);
+    M.fresh.forEach(x => w.set(fdoc("members", x.id), x.data));
+    C.fresh.forEach(x => w.set(fdoc("chores", x.id), x.data));
+    oEnt.forEach(x => {
+      const d = Object.assign({}, x.data);
+      if (M.map[d.m]) d.m = M.map[d.m];
+      if (d.c !== ONCE && C.map[d.c]) d.c = C.map[d.c];
+      w.set(fdoc("entries", x.id), d);
+    });
+    await w.flush();
+    await setDoc(doc(fs, "families", famId), { restored: Date.now() }, { merge: true });
+    // znacznik w starej bazie: telefony zalogowane jeszcze starym hasłem trafią do tej rodziny
+    await setDoc(doc(sFs, "meta", "migrated"), { name: famName, slug: slugOf(famName), at: Date.now() }).catch(() => {});
+    await signOut(sAuth);
+    form.reset();
+    toast("Przywrócono " + oEnt.length + " " + wpis(oEnt.length) + ", " + M.fresh.length + " os. i " + C.fresh.length + " " + czynnosc(C.fresh.length) + ".");
+  } catch (ex) {
+    console.warn("przywracanie:", ex);
+    const code = ex && ex.code;
+    toast(code === "app/bad-old-pass" ? "Złe stare hasło rodziny."
+      : code === "permission-denied" ? "Baza nie pozwoliła odczytać starych danych. Sprawdź, czy w Firebase są wklejone najnowsze reguły."
+      : (PL_ERR[code] || "Nie udało się przywrócić danych. Spróbuj jeszcze raz."), null, "err");
+  } finally {
+    deleteApp(sec).catch(() => {});
+    btn.disabled = false; btn.textContent = label;
+  }
+}
+
 async function changePin(form) {
   const oldP = $("#old-pin").value, newP = $("#new-pin").value, u = auth.currentUser;
   if (!PIN_RE.test(newP)) { toast("Nowy PIN musi mieć dokładnie 4 cyfry.", null, "err"); return; }
@@ -946,6 +1001,7 @@ function subscribe() {
   unsubs.push(onSnapshot(doc(fs, "families", famId), s => {
     const x = s.exists() ? s.data() : null;
     famName = x && typeof x.name === "string" ? clean(x.name, 30) : "";
+    famHasOld = !!x && (x.legacy === true || !!x.restored);
     if (famName) lsSet("dd.family", famName);
     renderFam();
   }, subErr));
