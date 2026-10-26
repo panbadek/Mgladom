@@ -9,6 +9,10 @@ service cloud.firestore {
       return request.resource.data[pole] is string && request.resource.data[pole].size() > 0 && request.resource.data[pole].size() <= max;
     }
 
+    function opis() {
+      return !('d' in request.resource.data) || (request.resource.data.d is string && request.resource.data.d.size() <= 200);
+    }
+
     match /members/{id} {
       allow read, delete: if rodzina();
       allow create, update: if rodzina() && tekst('name', 30);
@@ -20,7 +24,9 @@ service cloud.firestore {
     match /entries/{id} {
       allow read, delete: if rodzina();
       allow create: if rodzina() && request.resource.data.day is string && request.resource.data.t is number
-        && request.resource.data.m is string && request.resource.data.c is string;
+        && request.resource.data.m is string && request.resource.data.c is string && opis();
+      // później można zmienić tylko opis wykonanej czynności
+      allow update: if rodzina() && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['d']) && opis();
     }
   }
 }
