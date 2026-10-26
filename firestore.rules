@@ -1,0 +1,26 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{db}/documents {
+    // Dostęp ma tylko wspólne konto rodziny (logowanie hasłem rodziny w aplikacji).
+    function rodzina() {
+      return request.auth != null && request.auth.token.email == 'rodzina@WSTAW.firebaseapp.com';
+    }
+    function tekst(pole, max) {
+      return request.resource.data[pole] is string && request.resource.data[pole].size() > 0 && request.resource.data[pole].size() <= max;
+    }
+
+    match /members/{id} {
+      allow read, delete: if rodzina();
+      allow create, update: if rodzina() && tekst('name', 30);
+    }
+    match /chores/{id} {
+      allow read, delete: if rodzina();
+      allow create, update: if rodzina() && tekst('name', 50);
+    }
+    match /entries/{id} {
+      allow read, delete: if rodzina();
+      allow create: if rodzina() && request.resource.data.day is string && request.resource.data.t is number
+        && request.resource.data.m is string && request.resource.data.c is string;
+    }
+  }
+}
