@@ -5,9 +5,9 @@ import { getAuth, onAuthStateChanged, signInWithEmailAndPassword, createUserWith
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, onSnapshot, setDoc, deleteDoc, query, where }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=dev";
+import { firebaseConfig } from "./firebase-config.js?v=20261026-182400";
 
-const BUILD = "dev";
+const BUILD = "20261026-182400";
 // Wspólne konto rodziny: stały adres w domenie projektu, hasło zna cała rodzina.
 const FAMILY_EMAIL = "rodzina@" + firebaseConfig.authDomain;
 

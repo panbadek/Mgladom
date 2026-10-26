@@ -2,7 +2,7 @@
 
 Rodzinna tablica obowiązków: domownicy odhaczają wykonane czynności (np. rozładowanie zmywarki, wyniesienie śmieci, własne), a strona główna pokazuje, kto ile i czego zrobił dziś i w ostatnich 7 dniach.
 
-- Aplikacja: https://panbadek.github.io/Domowe-dyzury/
+- Aplikacja: https://panbadek.github.io/Mgladom/
 - Dane i logowanie: Firebase (Firestore + logowanie e-mail/hasło)
 - Wejście: wspólne hasło rodziny (konto `rodzina@<projekt>.firebaseapp.com`), ustawiane przy pierwszym uruchomieniu
 - Reguły bazy: `firestore.rules` (wklejone w konsoli Firebase → Firestore → Reguły)
