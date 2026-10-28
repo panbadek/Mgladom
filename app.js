@@ -5,10 +5,10 @@ import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signI
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDoc, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261026-212740";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261026-212740";
+import { firebaseConfig } from "./firebase-config.js?v=20261028-204653";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261028-204653";
 
-const BUILD = "20261026-212740";
+const BUILD = "20261028-204653";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -34,7 +34,6 @@ const SLOTS = 8;
 // dawne kolory (pierwsza wersja) → miejsce w nowej palecie
 const LEGACY_COLORS = { "#D9480F": 1, "#1C7ED6": 0, "#2B8A3E": 5, "#7048E8": 6, "#C2255C": 4, "#0C8599": 2, "#E67700": 3, "#8B5E34": 7 };
 const ONCE = "_once";
-const WINDOW_DAYS = 30;
 const SUGGESTIONS = ["Zmywanie naczyń","Odkurzanie","Wyprowadzenie psa","Pranie","Rozwieszenie prania","Podlewanie kwiatów","Zakupy","Gotowanie obiadu","Nakrycie do stołu","Sprzątanie łazienki","Ścielenie łóżka","Karmienie kota","Mycie okien","Prasowanie","Wycieranie kurzu"];
 const DAY_ABBR = ["Nd","Pn","Wt","Śr","Cz","Pt","So"];
 // Zestaw czynności na start (nowe rodziny dostają go od razu; przy przenosinach dopisywany do istniejących)
@@ -111,7 +110,9 @@ let unsubs = [], unsubEntries = null;
 let selected = null;
 let when = "today";
 let tab = ["zglos", "wyniki"].includes(location.hash.slice(1)) ? location.hash.slice(1) : (lsGet("dd.tab") === "wyniki" ? "wyniki" : "zglos");
-let range = lsGet("dd.range") === "30" ? 30 : 7;
+const RANGES = ["day", "7", "month"];
+const MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+let range = (v => v === "30" ? "month" : RANGES.includes(v) ? v : "day")(lsGet("dd.range"));
 let todayK = keyOf(new Date());
 let showAllHist = false, addingChore = false, tilesSig = "";
 let newIcon = "check", newIconManual = false;     // wybór ikonki w formularzu „Inna czynność”
@@ -196,7 +197,8 @@ function renderTabs() {
 }
 function renderSegs() {
   document.querySelectorAll('[data-action="when"]').forEach(b => b.setAttribute("aria-checked", String(b.dataset.when === when)));
-  document.querySelectorAll('[data-action="range"]').forEach(b => b.setAttribute("aria-checked", String(Number(b.dataset.range) === range)));
+  document.querySelectorAll('[data-action="range"]').forEach(b => b.setAttribute("aria-checked", String(b.dataset.range === range)));
+  $("#range-month").textContent = MONTHS[new Date().getMonth()];
 }
 
 function entryRow(e) {
@@ -270,58 +272,105 @@ function renderRecent() {
 }
 
 /* ---------- widok: Wyniki ---------- */
-function renderToday() {
-  const el = $("#today-list");
-  if (!ready()) { el.innerHTML = '<p class="loading">Wczytywanie…</p>'; return; }
-  const es = entriesIn([todayK]);
-  $("#today-total").textContent = es.length ? "razem " + es.length + " " + czynnosc(es.length) : "";
-  const series = seriesFor(es);
-  if (!series.length) { el.innerHTML = '<p class="loading">Gdy dodasz domowników, zobaczysz tu, kto co dziś zrobił.</p>'; return; }
-  const rows = series.map(m => ({ m, mine: es.filter(e => e.m === m.id) })).sort((a, b) => b.mine.length - a.mine.length || byOrder(a.m, b.m));
-  el.innerHTML = '<ul class="list">' + rows.map(r => {
-    const n = r.mine.length;
-    const done = n ? r.mine.slice().sort((a, b) => a.t - b.t).map(e => '<span class="done">' + esc(entryName(e)) + "<time>" + hhmm(e.t) + "</time></span>").join("") : '<span class="muted">jeszcze nic</span>';
-    return '<li class="trow"><div class="who-cell">' + avatar(r.m) + '<span class="nm">' + esc(r.m.name) + "</span></div>" +
-      '<div class="cnt-cell">' + (n ? tally(n, r.m.slot) : "") + '<span class="big" aria-label="' + n + " " + czynnosc(n) + '">' + n + "</span></div>" +
-      '<div class="done-list">' + done + "</div></li>";
-  }).join("") + "</ul>";
+// okres wyników: dziś, ostatnie 7 dni albo bieżący miesiąc (od 1. dnia do dziś)
+function periodKeys() {
+  if (range === "day") return [todayK];
+  if (range === "7") return keysFor(7);
+  return keysFor(new Date().getDate());
+}
+function rangeLabel(keys) {
+  return range === "day" ? "Dziś, " + fmtDM(todayK) : fmtDM(keys[0]) + " – " + fmtDM(keys[keys.length - 1]);
+}
+const legendHtml = series => series.length < 2 ? "" : series.map(m => '<span class="lg"><i style="' + cvar(m.slot) + '"></i>' + esc(m.name) + "</span>").join("");
+const capFirst = s => s.charAt(0).toUpperCase() + s.slice(1);
+
+// kubełki osi czasu: godziny (widok dnia) albo dni (7 dni, miesiąc)
+function buildBuckets(es) {
+  if (range === "day") {
+    const hourOf = e => new Date(e.t).getHours(), nowH = new Date().getHours();
+    const hs = es.map(hourOf);
+    const minH = Math.min(6, ...hs), maxH = Math.max(22, nowH, ...hs);
+    const out = [];
+    for (let h = minH; h <= maxH; h++) {
+      const list = es.filter(e => hourOf(e) === h);
+      const show = h === nowH || (h % 3 === 0 && Math.abs(h - nowH) >= 2);
+      out.push({ list, total: list.length, by: countBy(list, "m"), future: h > nowH, now: h === nowH,
+        lines: show ? [h + ":00"] : [], title: h + ":00–" + (h + 1) + ":00",
+        asOf: h === nowH ? "Teraz" : "Do " + (h + 1) + ":00", rowLabel: esc(h + ":00–" + (h + 1) + ":00") });
+    }
+    return out;
+  }
+  const keys = periodKeys(), yK = keyOf(dayAgo(1));
+  return keys.map((k, i) => {
+    const list = es.filter(e => e.day === k), d = dateOf(k), isToday = k === todayK;
+    const show = range === "7" || keys.length <= 8 || isToday || (keys.length - 1 - i) % 7 === 0;
+    const name = isToday ? "Dziś" : k === yK ? "Wczoraj" : capFirst(new Intl.DateTimeFormat("pl-PL", { weekday: "long" }).format(d));
+    return { list, total: list.length, by: countBy(list, "m"), future: false, now: isToday,
+      lines: !show ? [] : (range === "7" ? [isToday ? "Dziś" : DAY_ABBR[d.getDay()], fmtDM(k)] : [fmtDM(k)]),
+      title: name + ", " + fmtDM(k), asOf: "Stan na " + (isToday ? "dziś" : fmtDM(k)), rowLabel: dayLabel(k) };
+  });
 }
 
-function renderRanking(keys, es, series) {
-  const el = $("#ranking");
-  $("#rank-meta").textContent = es.length ? "razem " + es.length : "";
-  if (!series.length) { el.innerHTML = '<p class="loading">Tu pojawi się, kto ile razy i co robił.</p>'; return; }
+// Kto ile zrobił: pasek, liczba (w widoku dnia także kreski) i lista czynności
+function renderPeople(es, series) {
+  const el = $("#ranking"), day = range === "day";
+  $("#rank-meta").textContent = es.length ? "razem " + es.length + " " + czynnosc(es.length) : "";
+  if (!series.length) { el.innerHTML = '<p class="loading">Gdy dodasz domowników, zobaczysz tu, kto ile zrobił.</p>'; return; }
   const rows = series.map(m => { const mine = es.filter(e => e.m === m.id); return { m, n: mine.length, mine }; }).sort((a, b) => b.n - a.n || byOrder(a.m, b.m));
   const max = Math.max(1, ...rows.map(r => r.n));
   el.innerHTML = rows.map(r => {
-    const by = {}; for (const e of r.mine) { const k = entryName(e); by[k] = (by[k] || 0) + 1; }
-    const all = Object.entries(by).sort((a, b) => b[1] - a[1]);
-    const parts = all.slice(0, 4).map(([name, n]) => esc(name) + " " + n + "×").join(" · ") + (all.length > 4 ? " · i " + (all.length - 4) + " " + (all.length - 4 === 1 ? "inna" : "inne") : "");
+    let chips;
+    if (!r.n) chips = '<span class="muted" style="font-size:14px">' + (day ? "dziś jeszcze nic" : "brak wpisów w tym okresie") + "</span>";
+    else if (day) chips = r.mine.slice().sort((a, b) => a.t - b.t).map(e => '<span class="done">' + esc(entryName(e)) + "<time>" + hhmm(e.t) + "</time></span>").join("");
+    else {
+      const by = {}; for (const e of r.mine) { const k = entryName(e); by[k] = (by[k] || 0) + 1; }
+      const all = Object.entries(by).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "pl")), more = all.length - 4;
+      chips = all.slice(0, 4).map(([name, n]) => '<span class="done">' + esc(name) + "<b>" + n + "×</b></span>").join("") +
+        (more > 0 ? '<span class="more-c">i ' + more + " " + (more === 1 ? "inna" : (more % 10 >= 2 && more % 10 <= 4 && (more % 100 < 12 || more % 100 > 14)) ? "inne" : "innych") + "</span>" : "");
+    }
     return '<div class="bar-row"><div class="who-cell">' + avatar(r.m) + '<span class="nm">' + esc(r.m.name) + "</span></div>" +
       '<div class="track" role="img" aria-label="' + esc(r.m.name) + ": " + r.n + " " + czynnosc(r.n) + '"><span class="fill" style="' + cvar(r.m.slot) + ";width:" + (r.n / max * 100).toFixed(1) + '%"></span></div>' +
-      '<span class="num">' + r.n + '</span><p class="breakdown">' + (parts || "brak wpisów") + "</p></div>";
+      '<span class="num">' + (day && r.n ? tally(r.n, r.m.slot) : "") + r.n + "</span>" +
+      '<div class="done-list">' + chips + "</div></div>";
   }).join("");
 }
 
+// Udział w obowiązkach: diagram kołowy (pierścień) z sumą w środku i listą procentów
 function renderShare(es, series) {
   const el = $("#share-card");
-  const rows = series.map(m => ({ m, n: es.filter(e => e.m === m.id).length })).filter(r => r.n > 0);
   if (!es.length) { el.innerHTML = '<p class="chart-sub">Brak wpisów w tym okresie.</p>'; return; }
-  const total = es.length;
-  const pct = n => Math.round(n / total * 100);
-  if (rows.length === 1) {
-    el.innerHTML = '<p class="chart-sub">Wszystkie ' + total + " " + czynnosc(total) + " w tym okresie zrobił(a)</p>" +
-      '<div class="who-cell">' + avatar(rows[0].m) + '<span class="nm" style="font-size:20px">' + esc(rows[0].m.name) + "</span></div>";
-    return;
+  const total = es.length, pct = n => Math.round(n / total * 100);
+  let parts = series.map(m => ({ m, n: es.filter(e => e.m === m.id).length })).filter(p => p.n > 0);
+  if (parts.length > 6) {   // najwyżej 6 kawałków, reszta jako „Pozostali”
+    const keep = new Set(parts.slice().sort((a, b) => b.n - a.n).slice(0, 5).map(p => p.m.id));
+    const rest = parts.filter(p => !keep.has(p.m.id));
+    parts = parts.filter(p => keep.has(p.m.id)).concat([{ m: { id: "_rest", name: "Pozostali", slot: null }, n: rest.reduce((a, p) => a + p.n, 0), rest }]);
   }
-  el.innerHTML = '<p class="chart-sub">Część wszystkich ' + total + " " + czynnosc(total) + " w wybranym okresie</p>" +
-    '<div class="share" id="share-bar" tabindex="0" role="img" aria-label="' + esc(rows.map(r => r.m.name + " " + pct(r.n) + "%").join(", ")) + '">' +
-    rows.map(r => '<span class="sg" style="' + cvar(r.m.slot) + ";flex-grow:" + r.n + '"></span>').join("") + "</div>" +
-    '<ul class="list share-list">' + series.map(m => { const n = es.filter(e => e.m === m.id).length;
-      return '<li><i style="' + cvar(m.slot) + '"></i><b>' + pct(n) + "%</b><span>" + esc(m.name) + '</span><span class="muted">· ' + n + "</span></li>"; }).join("") + "</ul>";
-  const bar = $("#share-bar");
-  const tipRows = () => ({ title: "Udział w " + total + " " + czynnosc(total), rows: series.map(m => { const n = es.filter(e => e.m === m.id).length; return { slot: m.slot, label: m.name, value: n + " (" + pct(n) + "%)" }; }) });
-  bindTip(bar, tipRows);
+  const col = slot => slot == null ? "var(--axis)" : "var(--s" + slot + ")";
+  const S = 184, R = 74, T = 26, c = S / 2, trim = parts.length > 1 ? 1 / R : 0;   // 2 px przerwy między kawałkami
+  const pt = a => (c + R * Math.cos(a)).toFixed(2) + "," + (c + R * Math.sin(a)).toFixed(2);
+  let a = -Math.PI / 2, arcs = "";
+  parts.forEach((p, i) => {
+    const sweep = p.n / total * Math.PI * 2, style = ' style="stroke:' + col(p.m.slot) + '" stroke-width="' + T + '"';
+    const aria = ' role="img" aria-label="' + esc(p.m.name + ": " + p.n + " (" + pct(p.n) + "%)") + '"';
+    if (parts.length === 1) arcs += '<circle class="seg-arc" data-i="0" tabindex="0" cx="' + c + '" cy="' + c + '" r="' + R + '"' + style + aria + "/>";
+    else {
+      const a0 = a + trim, a1 = Math.max(a0 + 0.02, a + sweep - trim);
+      arcs += '<path class="seg-arc" data-i="' + i + '" tabindex="0" d="M' + pt(a0) + " A" + R + "," + R + " 0 " + (a1 - a0 > Math.PI ? 1 : 0) + " 1 " + pt(a1) + '"' + style + aria + "/>";
+    }
+    a += sweep;
+  });
+  el.innerHTML = '<div class="donut-wrap"><div class="donut" id="donut"><svg viewBox="0 0 ' + S + " " + S + '" aria-label="Diagram kołowy: udział w ' + total + ' czynnościach">' + arcs + "</svg>" +
+    '<div class="donut-mid"><b>' + total + "</b><span>" + czynnosc(total) + "</span></div></div>" +
+    '<ul class="list share-list">' + parts.map(p => '<li><i style="--c:' + col(p.m.slot) + '"></i><span class="pct">' + pct(p.n) + "%</span><span>" + esc(p.m.name) + '</span><span class="cnt-n">· ' + p.n + "</span></li>").join("") + "</ul></div>";
+  const dn = $("#donut");
+  dn.querySelectorAll(".seg-arc").forEach(node => {
+    const p = parts[Number(node.dataset.i)];
+    bindTip(node, () => ({ title: p.m.name + " · " + pct(p.n) + "%", rows: p.rest
+        ? p.rest.map(r => ({ slot: r.m.slot, label: r.m.name, value: String(r.n) }))
+        : [{ slot: p.m.slot, label: "z " + total + " " + czynnosc(total), value: String(p.n) }] }),
+      on => { dn.classList.toggle("dim", on); node.classList.toggle("hot", on); });
+  });
 }
 
 // skala osi: okrągłe wartości, najwyżej 4 podziałki
@@ -333,25 +382,35 @@ function roundTop(x, y, w, h, r) {
   r = Math.min(r, h, w / 2);
   return "M" + x + "," + (y + h) + "V" + (y + r) + "A" + r + "," + r + " 0 0 1 " + (x + r) + "," + y + "H" + (x + w - r) + "A" + r + "," + r + " 0 0 1 " + (x + w) + "," + (y + r) + "V" + (y + h) + "Z";
 }
-function renderDaily(keys, es, series) {
-  const box = $("#chart-daily"), leg = $("#daily-legend");
-  leg.innerHTML = series.map(m => '<span class="lg"><i style="' + cvar(m.slot) + '"></i>' + esc(m.name) + "</span>").join("");
+function axisLabels(buckets, xAt, H, padB, anchorAt) {
+  let s = "";
+  buckets.forEach((b, i) => b.lines.forEach((t, li) => {
+    s += '<text class="ax' + (b.now ? " today" : "") + '" x="' + xAt(i) + '" y="' + (H - padB + 15 + li * 14) + '" text-anchor="' + (anchorAt ? anchorAt(i) : "middle") + '">' + esc(t) + "</text>";
+  }));
+  return s;
+}
+
+// słupki: dzień po dniu albo godzina po godzinie
+function renderTimeChart(buckets, series) {
+  const box = $("#chart-daily");
+  $("#daily-h").textContent = range === "day" ? "Godzina po godzinie" : "Dzień po dniu";
+  $("#daily-legend").innerHTML = legendHtml(series);
   if ($("#tab-wyniki").hidden) return;
-  const W = Math.max(260, box.clientWidth || 320), H = 224;
-  const padL = 26, padR = 4, padT = 20, padB = 34;
-  const plotW = W - padL - padR, plotH = H - padT - padB;
-  const per = keys.map(k => { const day = es.filter(e => e.day === k); return { k, total: day.length, by: countBy(day, "m") }; });
-  const maxT = Math.max(1, ...per.map(p => p.total));
+  const two = buckets.some(b => b.lines.length > 1);
+  const W = Math.max(260, box.clientWidth || 320), H = two ? 224 : 210;
+  const padL = 26, padR = 4, padT = 20, padB = two ? 34 : 20;
+  const plotW = W - padL - padR, plotH = H - padT - padB, n = buckets.length;
+  const maxT = Math.max(1, ...buckets.map(p => p.total));
   const { top, step } = niceScale(maxT);
   const y = v => padT + plotH - (v / top) * plotH;
-  const band = plotW / keys.length, bw = Math.min(24, Math.max(4, band * 0.62));
-  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Liczba czynności dzień po dniu">';
+  const band = plotW / n, bw = Math.min(24, Math.max(4, band * 0.62)), capAll = band >= 14;
+  const maxIdx = buckets.reduce((bi, p, i) => p.total > buckets[bi].total ? i : bi, 0);
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Liczba czynności ' + (range === "day" ? "godzina po godzinie" : "dzień po dniu") + '">';
   for (let v = step; v <= top; v += step) s += '<line class="gl" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>';
   for (let v = 0; v <= top; v += step) s += '<text class="ax" x="' + (padL - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>";
-  const maxIdx = per.reduce((bi, p, i) => p.total > per[bi].total ? i : bi, 0);
-  per.forEach((p, i) => {
+  buckets.forEach((p, i) => {
     const x = padL + band * i + (band - bw) / 2;
-    let yCur = y(0), first = true, segs = [];
+    let yCur = y(0), first = true; const segs = [];
     for (const m of series) {
       const v = p.by[m.id] || 0; if (!v) continue;
       const h = (v / top) * plotH;
@@ -364,32 +423,86 @@ function renderDaily(keys, es, series) {
       const fill = 'style="fill:var(--s' + g.m.slot + ')"';
       s += j === segs.length - 1 ? '<path d="' + roundTop(x, g.top, bw, hh, 4) + '" ' + fill + "/>" : '<rect x="' + x + '" y="' + g.top + '" width="' + bw + '" height="' + hh + '" ' + fill + "/>";
     });
-    if (p.total && (range === 7 || i === maxIdx)) s += '<text class="cap" x="' + (x + bw / 2) + '" y="' + (y(p.total) - 6) + '" text-anchor="middle">' + p.total + "</text>";
+    if (p.total && (capAll || i === maxIdx)) s += '<text class="cap" x="' + (x + bw / 2) + '" y="' + (y(p.total) - 6) + '" text-anchor="middle">' + p.total + "</text>";
     s += "</g>";
-    const d = dateOf(p.k), isToday = p.k === todayK;
-    const showLabel = range === 7 || isToday || (keys.length - 1 - i) % 7 === 0;
-    if (showLabel) {
-      const cx = padL + band * i + band / 2;
-      if (range === 7) s += '<text class="ax' + (isToday ? " today" : "") + '" x="' + cx + '" y="' + (H - padB + 15) + '" text-anchor="middle">' + (isToday ? "Dziś" : DAY_ABBR[d.getDay()]) + "</text>";
-      s += '<text class="ax' + (isToday ? " today" : "") + '" x="' + cx + '" y="' + (H - padB + (range === 7 ? 29 : 15)) + '" text-anchor="middle">' + fmtDM(p.k) + "</text>";
-    }
   });
+  s += axisLabels(buckets, i => padL + band * i + band / 2, H, padB);
   s += '<line class="base" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
-  per.forEach((p, i) => { s += '<rect class="hit" tabindex="0" data-i="' + i + '" x="' + (padL + band * i) + '" y="' + padT + '" width="' + band + '" height="' + plotH + '"/>'; });
+  buckets.forEach((p, i) => { s += '<rect class="hit" tabindex="0" data-i="' + i + '" x="' + (padL + band * i) + '" y="' + padT + '" width="' + band + '" height="' + plotH + '"/>'; });
   s += "</svg>";
   box.innerHTML = s;
   const svg = box.querySelector("svg");
   box.querySelectorAll(".hit").forEach(hit => {
-    const i = Number(hit.dataset.i), p = per[i];
-    const lbl = p.k === todayK ? "Dziś, " + fmtDM(p.k) : new Intl.DateTimeFormat("pl-PL", { weekday: "long" }).format(dateOf(p.k)) + ", " + fmtDM(p.k);
-    bindTip(hit, () => ({ title: lbl + " · razem " + p.total, rows: series.map(m => ({ slot: m.slot, label: m.name, value: String(p.by[m.id] || 0) })) }),
+    const i = Number(hit.dataset.i), p = buckets[i];
+    bindTip(hit, () => ({ title: p.title + " · razem " + p.total, rows: series.map(m => ({ slot: m.slot, label: m.name, value: String(p.by[m.id] || 0) })) }),
       on => { svg.classList.toggle("dim", on); svg.querySelectorAll(".col").forEach(c => c.classList.toggle("hot", on && Number(c.dataset.i) === i)); });
   });
 }
 
+// wykres liniowy: suma czynności narastająco, osobna linia dla każdej osoby
+function renderTrend(buckets, series) {
+  const box = $("#chart-trend");
+  $("#trend-legend").innerHTML = legendHtml(series);
+  $("#trend-sub").textContent = "Ile czynności każda osoba miała na koncie w kolejnych " + (range === "day" ? "godzinach dnia" : "dniach") + ". Przesuń palcem po wykresie, żeby zobaczyć liczby.";
+  if ($("#tab-wyniki").hidden) return;
+  const total = buckets.reduce((a, b) => a + b.total, 0);
+  if (!series.length || !total) { box.innerHTML = '<p class="chart-sub">Brak wpisów w tym okresie.</p>'; return; }
+  const last = buckets.reduce((li, b, i) => b.future ? li : i, 0);
+  const cum = series.map(m => { let acc = 0; return buckets.map((b, i) => i > last ? null : (acc += (b.by[m.id] || 0))); });
+  const { top, step } = niceScale(Math.max(1, ...cum.map(c => c[last])));
+  const two = buckets.some(b => b.lines.length > 1);
+  const W = Math.max(260, box.clientWidth || 320), H = two ? 224 : 210;
+  const padL = 26, padR = 10, padT = 14, padB = two ? 34 : 20;
+  const plotW = W - padL - padR, plotH = H - padT - padB, n = buckets.length;
+  const x = i => n === 1 ? padL + plotW / 2 : padL + plotW * i / (n - 1);
+  const y = v => padT + plotH - (v / top) * plotH;
+  const dodge = si => (si - (series.length - 1) / 2) * 2.5;   // równe wyniki: linie obok siebie zamiast jedna na drugiej
+  const yl = (v, si) => y(v) + dodge(si);
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Wykres liniowy: suma czynności narastająco">';
+  for (let v = step; v <= top; v += step) s += '<line class="gl" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>';
+  for (let v = 0; v <= top; v += step) s += '<text class="ax" x="' + (padL - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>";
+  s += '<line class="base" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+  s += axisLabels(buckets, x, H, padB, i => n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle");
+  series.forEach((m, si) => {
+    const pts = cum[si].slice(0, last + 1).map((v, i) => x(i).toFixed(1) + "," + yl(v, si).toFixed(1));
+    if (pts.length > 1) s += '<path class="tr-line" style="stroke:var(--s' + m.slot + ')" d="M' + pts.join("L") + '"/>';
+    s += '<circle class="tr-dot" r="4.5" cx="' + x(last).toFixed(1) + '" cy="' + yl(cum[si][last], si).toFixed(1) + '" style="fill:var(--s' + m.slot + ')"/>';
+  });
+  s += '<line class="cross" visibility="hidden" y1="' + padT + '" y2="' + (padT + plotH) + '"/><g class="hov"></g>';
+  s += '<rect class="trend-hit" tabindex="0" aria-label="Wykres liniowy: użyj strzałek, żeby zobaczyć kolejne liczby" x="' + (padL - 10) + '" y="0" width="' + (plotW + 20) + '" height="' + (padT + plotH + 6) + '"/>';
+  s += "</svg>";
+  box.innerHTML = s;
+  const svg = box.querySelector("svg"), cross = svg.querySelector(".cross"), hov = svg.querySelector(".hov"), hit = svg.querySelector(".trend-hit");
+  let cur = -1;
+  const pick = clientX => {
+    const r = svg.getBoundingClientRect(), sx = (clientX - r.left) * (W / r.width);
+    return Math.max(0, Math.min(last, n === 1 ? 0 : Math.round((sx - padL) / (plotW / (n - 1)))));
+  };
+  const show = i => {
+    if (tipOwner && tipOwner.node !== hit) hideTip();
+    cur = i;
+    tipOwner = { node: hit, off: () => { cross.setAttribute("visibility", "hidden"); hov.innerHTML = ""; } };
+    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
+    hov.innerHTML = series.map((m, si) => '<circle class="tr-dot" r="4.5" cx="' + x(i) + '" cy="' + yl(cum[si][i], si) + '" style="fill:var(--s' + m.slot + ')"/>').join("");
+    const r = svg.getBoundingClientRect(), k = r.width / W, px = r.left + x(i) * k;
+    showTip({ left: px, right: px, width: 0, top: r.top + padT * k, bottom: r.top + (padT + plotH) * k, height: plotH * k },
+      { title: buckets[i].asOf + " · razem " + cum.reduce((acc, c) => acc + c[i], 0), rows: series.map((m, si) => ({ slot: m.slot, label: m.name, value: String(cum[si][i]) })) });
+  };
+  hit.addEventListener("pointerdown", e => show(pick(e.clientX)));
+  hit.addEventListener("pointermove", e => show(pick(e.clientX)));
+  hit.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideTip(); });
+  hit.addEventListener("focus", () => show(cur >= 0 ? cur : last));
+  hit.addEventListener("blur", hideTip);
+  hit.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    show(Math.max(0, Math.min(last, (cur < 0 ? last : cur) + (e.key === "ArrowLeft" ? -1 : 1))));
+  });
+}
+
 function renderChoreChart(es, series) {
-  const el = $("#chores-chart"), leg = $("#chores-legend");
-  leg.innerHTML = series.map(m => '<span class="lg"><i style="' + cvar(m.slot) + '"></i>' + esc(m.name) + "</span>").join("");
+  const el = $("#chores-chart");
+  $("#chores-legend").innerHTML = legendHtml(series);
   const groups = {};
   for (const e of es) {
     const key = e.once ? ONCE : e.c;
@@ -421,25 +534,22 @@ function cell(n, slot, max) {
   const p = Math.round(18 + 62 * (n / max));
   return '<td><span class="cnt' + (p >= 52 ? " s" : "") + '" style="' + cvar(slot) + ";--p:" + p + '%">' + n + "</span></td>";
 }
-function renderTable(keys, es, series) {
+function renderTable(buckets, es, series) {
   const tbl = $("#week-table");
   if (!series.length) { tbl.innerHTML = ""; return; }
-  const byDay = {}, byCh = {};
-  for (const m of series) { byDay[m.id] = countBy(es.filter(e => e.m === m.id), "day"); }
+  // widok dnia: tylko godziny, w których coś zrobiono; 7 dni i miesiąc: każdy dzień
+  const tRows = buckets.filter(b => range !== "day" || b.total > 0).reverse();
   const groups = {};
   for (const e of es) { const key = e.once ? ONCE : e.c; (groups[key] ||= { key, name: e.once ? "Jednorazowe" : entryName(e), icon: e.once ? "check" : entryIcon(e), list: [] }).list.push(e); }
   for (const c of chores) if (!groups[c.id]) groups[c.id] = { key: c.id, name: c.name, icon: choreIcon(c), list: [] };
   const cRows = Object.values(groups).sort((a, b) => b.list.length - a.list.length || a.name.localeCompare(b.name, "pl"));
-  cRows.forEach(r => { byCh[r.key] = countBy(r.list, "m"); });
-  const dayMax = Math.max(1, ...series.flatMap(m => keys.map(k => byDay[m.id][k] || 0)));
+  const byCh = {}; cRows.forEach(r => { byCh[r.key] = countBy(r.list, "m"); });
+  const tMax = Math.max(1, ...tRows.flatMap(b => series.map(m => b.by[m.id] || 0)));
   const chMax = Math.max(1, ...cRows.flatMap(r => series.map(m => byCh[r.key][m.id] || 0)));
   const span = series.length + 2, zero = '<span class="zero">·</span>';
   let h = '<thead><tr><th scope="col"></th>' + series.map(m => '<th scope="col" class="mh">' + avatar(m, "sm") + '<span class="mhn">' + esc(m.name) + "</span></th>").join("") + '<th scope="col" class="tot">Razem</th></tr></thead>';
-  h += '<tbody><tr class="grp"><th colspan="' + span + '" scope="colgroup">Dzień po dniu</th></tr>';
-  for (const k of keys.slice().reverse()) {
-    const tot = es.filter(e => e.day === k).length;
-    h += "<tr" + (k === todayK ? ' class="is-today"' : "") + '><th scope="row">' + dayLabel(k) + "</th>" + series.map(m => cell(byDay[m.id][k] || 0, m.slot, dayMax)).join("") + '<td class="tot">' + (tot || zero) + "</td></tr>";
-  }
+  h += '<tbody><tr class="grp"><th colspan="' + span + '" scope="colgroup">' + (range === "day" ? "Godzina po godzinie" : "Dzień po dniu") + "</th></tr>";
+  for (const b of tRows) h += "<tr" + (b.now ? ' class="is-today"' : "") + '><th scope="row">' + b.rowLabel + "</th>" + series.map(m => cell(b.by[m.id] || 0, m.slot, tMax)).join("") + '<td class="tot">' + (b.total || zero) + "</td></tr>";
   h += '<tr class="sum"><th scope="row">Razem</th>' + series.map(m => "<td>" + es.filter(e => e.m === m.id).length + "</td>").join("") + '<td class="tot">' + es.length + "</td></tr></tbody>";
   if (cRows.length) {
     h += '<tbody><tr class="grp"><th colspan="' + span + '" scope="colgroup">Kto co robił</th></tr>';
@@ -449,7 +559,7 @@ function renderTable(keys, es, series) {
   tbl.innerHTML = h;
 }
 
-function renderHistory(keys, es) {
+function renderHistory(es) {
   const el = $("#history");
   if (busy(el)) return;
   $("#hist-meta").textContent = es.length ? es.length + " " + wpis(es.length) : "";
@@ -466,17 +576,21 @@ function renderHistory(keys, es) {
 }
 
 function renderResults() {
-  const keys = keysFor(range);
-  $("#range-label").textContent = fmtDM(keys[0]) + " – " + fmtDM(keys[keys.length - 1]);
-  renderToday();
-  if (!ready()) return;
-  const es = entriesIn(keys), series = seriesFor(es);
-  renderRanking(keys, es, series);
+  const keys = periodKeys();
+  $("#range-label").textContent = rangeLabel(keys);
+  if (!ready()) {
+    for (const id of ["#ranking", "#share-card", "#chart-daily", "#chart-trend", "#chores-chart", "#history"]) $(id).innerHTML = '<p class="loading">Wczytywanie…</p>';
+    $("#week-table").innerHTML = ""; $("#rank-meta").textContent = ""; $("#hist-meta").textContent = "";
+    return;
+  }
+  const es = entriesIn(keys), series = seriesFor(es), buckets = buildBuckets(es);
+  renderPeople(es, series);
   renderShare(es, series);
-  renderDaily(keys, es, series);
+  renderTimeChart(buckets, series);
+  renderTrend(buckets, series);
   renderChoreChart(es, series);
-  renderTable(keys, es, series);
-  renderHistory(keys, es);
+  renderTable(buckets, es, series);
+  renderHistory(es);
 }
 
 /* ---------- podpowiedź (tooltip) ---------- */
@@ -487,13 +601,13 @@ function showTip(target, data) {
   const t = document.createElement("div"); t.className = "tip-t"; t.textContent = data.title; tipEl.appendChild(t);
   for (const r of data.rows) {
     const row = document.createElement("div"); row.className = "tip-r";
-    const i = document.createElement("i"); i.setAttribute("style", cvar(r.slot));
+    const i = document.createElement("i"); i.setAttribute("style", r.slot == null ? "--c:var(--axis)" : cvar(r.slot));
     const b = document.createElement("b"); b.textContent = r.value;
     const sp = document.createElement("span"); sp.textContent = r.label;
     row.append(i, b, sp); tipEl.appendChild(row);
   }
   tipEl.hidden = false;
-  const rc = target.getBoundingClientRect(), tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
+  const rc = target.getBoundingClientRect ? target.getBoundingClientRect() : target, tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
   let left = Math.min(Math.max(8, rc.left + rc.width / 2 - tw / 2), window.innerWidth - tw - 8);
   let top = rc.top - th - 8; if (top < 8) top = Math.min(rc.bottom + 8, window.innerHeight - th - 8);
   tipEl.style.left = left + "px"; tipEl.style.top = top + "px";
@@ -510,7 +624,9 @@ function bindTip(node, getData, highlight) {
 document.addEventListener("pointerdown", e => { if (tipOwner && !tipOwner.node.contains(e.target)) hideTip(); }, true);
 window.addEventListener("scroll", () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
 let resizeT = null;
-window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => { if (famId && tab === "wyniki" && ready()) { const keys = keysFor(range), es = entriesIn(keys); renderDaily(keys, es, seriesFor(es)); } }, 150); });
+window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => {
+  if (famId && tab === "wyniki" && ready()) { hideTip(); const es = entriesIn(periodKeys()), series = seriesFor(es), b = buildBuckets(es); renderTimeChart(b, series); renderTrend(b, series); }
+}, 150); });
 
 /* ---------- Ustawienia ---------- */
 function memberRow(m) {
@@ -665,7 +781,7 @@ document.addEventListener("click", e => {
   if (a === "pick") { selected = id; lsSet("dd.member." + famId, selected); renderWho(); renderTiles(); }
   else if (a === "tab") { setTab(b.dataset.tab); }
   else if (a === "when") { when = b.dataset.when; renderSegs(); }
-  else if (a === "range") { range = Number(b.dataset.range) === 30 ? 30 : 7; lsSet("dd.range", String(range)); showAllHist = false; renderSegs(); renderResults(); }
+  else if (a === "range") { range = RANGES.includes(b.dataset.range) ? b.dataset.range : "day"; lsSet("dd.range", range); showAllHist = false; hideTip(); renderSegs(); renderResults(); }
   else if (a === "log") { const c = chores.find(x => x.id === id); if (c) logEntry({ id: c.id, name: c.name, icon: choreIcon(c) }); }
   else if (a === "add-chore") { addingChore = true; newIcon = "check"; newIconManual = false; renderTiles(true); const i = $("#tile-chore"); if (i) i.focus(); }
   else if (a === "cancel-chore") { addingChore = false; renderTiles(true); }
@@ -984,6 +1100,8 @@ async function changePin(form) {
 }
 
 /* ---------- dane na żywo ---------- */
+// pierwszy potrzebny dzień: początek bieżącego miesiąca albo 6 dni wstecz (co wcześniejsze)
+function windowStart() { const m = new Date(); m.setDate(1); const a = keyOf(m), b = keyOf(dayAgo(6)); return a < b ? a : b; }
 function subErr(e) {
   console.warn(e);
   showNotice(e && e.code === "permission-denied"
@@ -992,7 +1110,7 @@ function subErr(e) {
 }
 function subEntries() {
   if (unsubEntries) unsubEntries();
-  unsubEntries = onSnapshot(query(fcol("entries"), where("day", ">=", keysFor(WINDOW_DAYS)[0])), s => {
+  unsubEntries = onSnapshot(query(fcol("entries"), where("day", ">=", windowStart())), s => {
     ENT = s.docs.map(parseEntry).filter(Boolean).sort((a, b) => b.t - a.t);
     rebuildGhosts(); loaded.entries = true; renderAll();
   }, subErr);
@@ -1033,9 +1151,12 @@ function endSession() {
   $("#app").hidden = true;
 }
 
+let lastHour = new Date().getHours();
 function checkDay() {
-  const k = keyOf(new Date());
-  if (k !== todayK) { todayK = k; renderHeader(); if (famId) { subEntries(); renderAll(); } }
+  const now = new Date(), k = keyOf(now);
+  if (k !== todayK) { todayK = k; lastHour = now.getHours(); renderHeader(); renderSegs(); if (famId) { subEntries(); renderAll(); } return; }
+  // widok dnia: przesuwamy „teraz” na wykresach co pełną godzinę
+  if (now.getHours() !== lastHour) { lastHour = now.getHours(); if (famId && range === "day" && tab === "wyniki" && ready()) renderResults(); }
 }
 setInterval(checkDay, 30000);
 document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkDay(); checkUpdate(); } });

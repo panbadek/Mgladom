@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261026-212740">
+<link rel="manifest" href="manifest.json?v=20261028-204653">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -203,19 +203,23 @@ input.pin::placeholder{ letter-spacing:.3em }
 .done-list{ grid-column:1 / -1; display:flex; flex-wrap:wrap; gap:6px; padding-left:40px }
 .done{ font-size:14px; padding:3px 10px; border-radius:999px; background:var(--surface); border:1px solid var(--line) }
 .done time{ color:var(--muted); font-variant-numeric:tabular-nums; margin-left:4px }
+.done b{ font-variant-numeric:tabular-nums; margin-left:5px }
+.more-c{ font-size:14px; color:var(--muted); align-self:center }
 
 .bars{ display:grid; gap:16px; margin-top:16px }
-.bar-row{ display:grid; grid-template-columns:minmax(0,9.5rem) minmax(0,1fr) 2.6rem; align-items:center; gap:4px 12px }
+.bar-row{ display:grid; grid-template-columns:minmax(0,9.5rem) minmax(0,1fr) auto; align-items:center; gap:6px 12px; padding-bottom:14px; border-bottom:1px solid var(--line-2) }
+.bar-row:last-child{ border-bottom:0; padding-bottom:0 }
 .track{ height:14px; background:var(--line-2); border-radius:0 4px 4px 0; overflow:hidden }
 .fill{ display:block; height:100%; background:var(--c); border-radius:0 4px 4px 0 }
-.num{ font-family:var(--font-display); font-weight:700; font-size:22px; text-align:right; line-height:1 }
+.num{ display:flex; align-items:center; justify-content:flex-end; gap:10px; font-family:var(--font-display); font-weight:700; font-size:22px; text-align:right; line-height:1; min-width:2.2rem }
 .breakdown{ grid-column:2 / -1; font-size:14px; color:var(--muted) }
+.bar-row .done-list{ grid-column:2 / -1; padding-left:0 }
 @media (max-width:520px){
-  .bar-row{ grid-template-columns:minmax(0,1fr) 2.6rem }
+  .bar-row{ grid-template-columns:minmax(0,1fr) auto }
   .bar-row .who-cell{ grid-column:1; grid-row:1 }
   .bar-row .num{ grid-column:2; grid-row:1 }
   .bar-row .track{ grid-column:1 / -1; grid-row:2 }
-  .bar-row .breakdown{ grid-column:1 / -1; grid-row:3 }
+  .bar-row .breakdown, .bar-row .done-list{ grid-column:1 / -1; grid-row:3 }
 }
 
 .chart-card{ background:var(--surface); border:1px solid var(--line); border-radius:var(--r); padding:16px; margin-top:14px; display:grid; gap:12px }
@@ -223,7 +227,8 @@ input.pin::placeholder{ letter-spacing:.3em }
 .legend{ display:flex; flex-wrap:wrap; gap:6px 16px; font-size:14px }
 .lg{ display:inline-flex; align-items:center; gap:6px }
 .lg i{ width:12px; height:12px; border-radius:3px; background:var(--c); display:inline-block }
-#chart-daily{ position:relative; min-height:224px }
+#chart-daily, #chart-trend{ position:relative; min-height:224px }
+#chart-trend svg{ display:block; width:100%; height:auto; overflow:visible; touch-action:pan-y }
 #chart-daily svg{ display:block; width:100%; height:auto; overflow:visible }
 .ax{ fill:var(--muted); font-size:11px; font-family:var(--font-body); font-variant-numeric:tabular-nums }
 .ax.today{ fill:var(--ink); font-weight:700 }
@@ -235,6 +240,23 @@ input.pin::placeholder{ letter-spacing:.3em }
 .hit{ fill:transparent; cursor:pointer; outline:none }
 .hit:focus-visible{ stroke:var(--accent); stroke-width:2 }
 
+.donut-wrap{ display:flex; align-items:center; gap:18px 24px; flex-wrap:wrap }
+.donut{ position:relative; width:184px; height:184px; flex:none; max-width:100% }
+.donut svg{ display:block; width:100%; height:100%; overflow:visible }
+.donut .seg-arc{ fill:none; cursor:pointer; transition:opacity .12s; outline:none }
+.donut.dim .seg-arc{ opacity:.4 } .donut.dim .seg-arc.hot{ opacity:1 }
+.donut .seg-arc:focus-visible{ opacity:1 }
+.donut-mid{ position:absolute; inset:0; display:grid; place-content:center; text-align:center; pointer-events:none }
+.donut-mid b{ font-family:var(--font-display); font-size:34px; line-height:1 }
+.donut-mid span{ font-size:13px; color:var(--muted); margin-top:4px }
+.donut-wrap .share-list{ flex:1 1 12rem; min-width:0 }
+.share-list .pct{ min-width:3.2em; font-weight:700; font-variant-numeric:tabular-nums }
+.share-list .cnt-n{ color:var(--muted); font-variant-numeric:tabular-nums }
+.tr-line{ fill:none; stroke-width:2; stroke-linecap:round; stroke-linejoin:round }
+.tr-dot{ stroke:var(--surface); stroke-width:2 }
+.cross{ stroke:var(--axis); stroke-width:1 }
+.trend-hit{ fill:transparent; cursor:crosshair; outline:none }
+.trend-hit:focus-visible{ stroke:var(--accent); stroke-width:2 }
 .share{ display:flex; gap:2px; height:24px; cursor:pointer }
 .share .sg{ background:var(--c); min-width:3px; flex-basis:0 }
 .share .sg:first-child{ border-radius:4px 0 0 4px } .share .sg:last-child{ border-radius:0 4px 4px 0 } .share .sg:only-child{ border-radius:4px }
@@ -327,7 +349,7 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 .toast.err .toast-inner{ background:var(--err-bg); color:#fff }
 
 @media (prefers-reduced-motion: reduce){
-  .tile, .col{ transition:none } .tile:active:not(:disabled){ transform:none }
+  .tile, .col, .donut .seg-arc{ transition:none } .tile:active:not(:disabled){ transform:none }
 }
 </style>
 </head>
@@ -424,16 +446,12 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
   <!-- WYNIKI -->
   <div id="tab-wyniki" role="tabpanel" aria-labelledby="tab-btn-wyniki" hidden>
     <div class="res">
-      <section class="wide" aria-labelledby="today-h">
-        <div class="sec-head"><h2 id="today-h">Dzisiaj</h2><span id="today-total" class="sec-meta"></span></div>
-        <div id="today-list"><p class="loading">Wczytywanie…</p></div>
-      </section>
-
       <div class="filters wide">
         <span class="lbl2">Okres</span>
-        <div class="seg" role="radiogroup" aria-label="Okres">
-          <button type="button" role="radio" aria-checked="true" data-action="range" data-range="7">7 dni</button>
-          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="30">30 dni</button>
+        <div class="seg" role="radiogroup" aria-label="Okres wyników">
+          <button type="button" role="radio" aria-checked="true" data-action="range" data-range="day">Dziś</button>
+          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="7">7 dni</button>
+          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="month" id="range-month">Ten miesiąc</button>
         </div>
         <span id="range-label" class="sec-meta"></span>
       </div>
@@ -444,7 +462,7 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
       </section>
 
       <section aria-labelledby="share-h">
-        <div class="sec-head"><h2 id="share-h">Udział w obowiązkach</h2></div>
+        <div class="sec-head"><h2 id="share-h">Udział w obowiązkach</h2><span class="sec-meta">diagram kołowy</span></div>
         <div class="chart-card" id="share-card"><p class="loading">Wczytywanie…</p></div>
       </section>
 
@@ -453,6 +471,15 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
         <div class="chart-card">
           <div id="daily-legend" class="legend"></div>
           <div id="chart-daily"></div>
+        </div>
+      </section>
+
+      <section class="wide" aria-labelledby="trend-h">
+        <div class="sec-head"><h2 id="trend-h">Postęp w czasie</h2><span class="sec-meta">suma od początku okresu</span></div>
+        <div class="chart-card">
+          <p class="chart-sub" id="trend-sub">Ile czynności każda osoba miała na koncie w kolejnych dniach. Przesuń palcem po wykresie, żeby zobaczyć liczby.</p>
+          <div id="trend-legend" class="legend"></div>
+          <div id="chart-trend"></div>
         </div>
       </section>
 
@@ -548,5 +575,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261026-212740"></script>
+<script type="module" src="app.js?v=20261028-204653"></script>
 </body></html>

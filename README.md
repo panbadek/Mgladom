@@ -1,6 +1,6 @@
 # Domowe Dyżury
 
-Rodzinna tablica obowiązków: domownicy odhaczają wykonane czynności (np. rozładowanie zmywarki, wyniesienie śmieci, własne), a strona główna pokazuje, kto ile i czego zrobił dziś i w ostatnich 7 dniach.
+Rodzinna tablica obowiązków: domownicy odhaczają wykonane czynności (np. rozładowanie zmywarki, wyniesienie śmieci, własne), a zakładka Wyniki pokazuje, kto ile i czego zrobił — za dziś, ostatnie 7 dni albo bieżący miesiąc (ranking, diagram kołowy udziału, słupki dzień po dniu / godzina po godzinie, wykres narastający, najczęstsze czynności, tabela, historia).
 
 - Aplikacja: https://panbadek.github.io/Mgladom/
 - Dane i logowanie: Firebase (Firestore + logowanie e-mail/hasło)
