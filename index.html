@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261028-204653">
+<link rel="manifest" href="manifest.json?v=20261031-005456">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -119,7 +119,7 @@ input.pin::placeholder{ letter-spacing:.3em }
 .layout{ display:grid; gap:34px; grid-template-columns:minmax(0,1fr) }
 @media (min-width:900px){
   .layout{ grid-template-columns:minmax(0,430px) minmax(0,1fr); align-items:start; gap:40px }
-  .log{ position:sticky; top:calc(76px + env(safe-area-inset-top, 0px)) }
+  .log{ position:sticky; top:calc(76px + env(safe-area-inset-top, 0px)); max-height:calc(100vh - 92px - env(safe-area-inset-top, 0px)); overflow:auto }
 }
 .panel{ background:var(--surface); border:1px solid var(--line); border-radius:var(--r); box-shadow:var(--shadow); padding:18px; display:grid; gap:12px; min-width:0 }
 .panel-head{ display:flex; align-items:center; justify-content:space-between; gap:12px; flex-wrap:wrap }
@@ -136,6 +136,13 @@ input.pin::placeholder{ letter-spacing:.3em }
 .av{ width:30px; height:30px; border-radius:50%; background:var(--c); color:var(--ci); display:inline-grid; place-items:center; font-family:var(--font-display); font-weight:700; font-size:15px; flex:none; line-height:1 }
 .av.sm{ width:24px; height:24px; font-size:12px }
 .empty-inline{ display:grid; gap:10px; width:100% }
+.note-box{ display:grid; gap:8px; margin-top:4px; padding-top:14px; border-top:1px solid var(--line-2) }
+.note-head{ display:flex; align-items:center; justify-content:space-between; gap:8px }
+.note-head .step{ margin-top:0 }
+.note-target{ display:flex; align-items:center; flex-wrap:wrap; gap:2px 6px; font-size:15px; line-height:1.3; color:var(--muted) }
+.note-target b{ color:var(--ink); font-weight:700 }
+.note-target .ic.xs{ color:var(--accent); margin-right:0 }
+.note-box.target #note{ border-color:var(--accent) }
 .note-hint{ font-size:13px; color:var(--muted); margin-top:-4px }
 
 .tiles{ display:grid; grid-template-columns:repeat(2, minmax(0,1fr)); gap:10px }
@@ -228,6 +235,21 @@ input.pin::placeholder{ letter-spacing:.3em }
 .lg{ display:inline-flex; align-items:center; gap:6px }
 .lg i{ width:12px; height:12px; border-radius:3px; background:var(--c); display:inline-block }
 #chart-daily, #chart-trend{ position:relative; min-height:224px }
+#chart-person{ position:relative; min-height:200px }
+#chart-person svg{ display:block; width:100%; height:auto; overflow:visible; touch-action:pan-y }
+.p-area{ fill-opacity:.12; stroke:none }
+.person-pick{ margin-top:14px }
+.pstats{ display:flex; flex-wrap:wrap; gap:10px 28px; margin:16px 0 0 }
+.pstats div{ display:grid; gap:2px; min-width:0 }
+.pstats dt{ font-size:13px; color:var(--muted) }
+.pstats dd{ margin:0; font-family:var(--font-display); font-weight:700; font-size:24px; line-height:1.1 }
+.pstats dd small{ font-family:var(--font-body); font-weight:400; font-size:14px; color:var(--muted); margin-left:6px }
+.person-grid{ display:grid; gap:14px; grid-template-columns:minmax(0,1fr); margin-top:14px }
+.person-grid > *{ min-width:0 }
+.person-grid .chart-card{ margin-top:0; align-content:start }
+@media (min-width:900px){ .person-grid{ grid-template-columns:minmax(0,3fr) minmax(0,2fr) } }
+.chart-card h3{ font-size:17px }
+.share-list .zero-row{ opacity:.55 }
 #chart-trend svg{ display:block; width:100%; height:auto; overflow:visible; touch-action:pan-y }
 #chart-daily svg{ display:block; width:100%; height:auto; overflow:visible }
 .ax{ fill:var(--muted); font-size:11px; font-family:var(--font-body); font-variant-numeric:tabular-nums }
@@ -280,6 +302,7 @@ input.pin::placeholder{ letter-spacing:.3em }
 .tip-r{ display:flex; align-items:center; gap:8px; padding:1px 0 }
 .tip-r i{ width:12px; height:2px; border-radius:1px; background:var(--c); flex:none }
 .tip-r span{ flex:1; color:var(--muted) }
+.tip-r.nokey{ padding-left:0 }
 .tip-r b{ font-variant-numeric:tabular-nums }
 
 details.tbl{ background:var(--surface); border:1px solid var(--line); border-radius:var(--r); overflow:hidden }
@@ -345,7 +368,7 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 }
 .toast-inner{ pointer-events:auto; display:flex; align-items:center; gap:14px; background:var(--toast-bg); color:var(--toast-ink); padding:10px 10px 10px 16px; border-radius:12px; max-width:520px; width:100%; box-shadow:0 8px 24px rgba(0,0,0,.25); font-weight:700; min-height:48px }
 .toast-inner span{ flex:1; min-width:0; overflow-wrap:anywhere }
-.toast-act{ background:transparent; color:inherit; border:1px solid currentColor; border-radius:9px; padding:6px 12px; font-weight:700; cursor:pointer; opacity:.9 }
+.toast-act{ flex:none; background:transparent; color:inherit; border:1px solid currentColor; border-radius:9px; padding:6px 12px; font-weight:700; cursor:pointer; opacity:.9 }
 .toast.err .toast-inner{ background:var(--err-bg); color:#fff }
 
 @media (prefers-reduced-motion: reduce){
@@ -429,11 +452,20 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
         <p class="step">Kto?</p>
         <div id="who" class="who"><p class="muted">Wczytywanie domowników…</p></div>
         <p id="who-hint" class="hint" hidden>Najpierw wybierz, kto wykonał zadanie.</p>
-        <label class="step" for="note">Opis (nieobowiązkowy)</label>
-        <input id="note" maxlength="200" placeholder="Np. umyłem też blaty" autocomplete="off">
-        <p class="note-hint">Dołączy się do następnej odhaczonej czynności.</p>
         <p class="step">Co zostało zrobione?</p>
         <div id="tiles" class="tiles"><p class="muted span">Wczytywanie czynności…</p></div>
+        <div id="note-box" class="note-box">
+          <div class="note-head">
+            <label class="step" for="note" id="note-lbl">Opis (nieobowiązkowy)</label>
+            <button type="button" class="linkbtn small" id="note-close" data-action="note-close" hidden>Zamknij</button>
+          </div>
+          <p class="note-target" id="note-target" hidden></p>
+          <div class="row">
+            <input id="note" maxlength="200" placeholder="Np. umyłem też blaty" autocomplete="off" enterkeyhint="done">
+            <button type="button" class="btn primary sm" id="note-save" data-action="note-save" hidden>Zapisz opis</button>
+          </div>
+          <p class="note-hint" id="note-hint">Wpisz przed dotknięciem czynności albo zaraz po niej.</p>
+        </div>
       </section>
 
       <section aria-labelledby="recent-h">
@@ -480,6 +512,24 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
           <p class="chart-sub" id="trend-sub">Ile czynności każda osoba miała na koncie w kolejnych dniach. Przesuń palcem po wykresie, żeby zobaczyć liczby.</p>
           <div id="trend-legend" class="legend"></div>
           <div id="chart-trend"></div>
+        </div>
+      </section>
+
+      <section class="wide" aria-labelledby="person-h">
+        <div class="sec-head"><h2 id="person-h">Wybrana osoba</h2><span id="person-meta" class="sec-meta"></span></div>
+        <div id="person-pick" class="who person-pick" role="radiogroup" aria-label="Wybierz osobę"></div>
+        <dl id="person-stats" class="pstats"></dl>
+        <div class="person-grid">
+          <div class="chart-card">
+            <h3 id="pline-h">Ile czynności dziennie</h3>
+            <p class="chart-sub" id="pline-sub"></p>
+            <div id="chart-person"></div>
+          </div>
+          <div class="chart-card">
+            <h3 id="pdonut-h">Ile czynności dziennie</h3>
+            <p class="chart-sub" id="pdonut-sub"></p>
+            <div id="person-donut"></div>
+          </div>
         </div>
       </section>
 
@@ -575,5 +625,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261028-204653"></script>
+<script type="module" src="app.js?v=20261031-005456"></script>
 </body></html>

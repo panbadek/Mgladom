@@ -5,10 +5,10 @@ import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signI
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDoc, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261028-204653";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261028-204653";
+import { firebaseConfig } from "./firebase-config.js?v=20261031-005456";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261031-005456";
 
-const BUILD = "20261028-204653";
+const BUILD = "20261031-005456";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -118,6 +118,8 @@ let showAllHist = false, addingChore = false, tilesSig = "";
 let newIcon = "check", newIconManual = false;     // wybór ikonki w formularzu „Inna czynność”
 let mIcon = "check", mIconManual = false;         // wybór ikonki w Ustawieniach
 let iconEdit = null, editNote = null, editMember = null;
+let personSel = null;                               // osoba w sekcji „Wybrana osoba”
+let lastLogged = null, noteMode = "next";           // ostatnio zgłoszona czynność (opis pod kafelkami)
 let swatch = null, toastAction = null, toastTimer = null;
 let flashId = null, flashAt = 0;
 
@@ -248,7 +250,7 @@ function renderTiles(force) {
         '<label class="tname" for="tile-chore">Inna czynność</label>' +
         '<input id="tile-chore" maxlength="80" placeholder="Np. Mycie samochodu">' +
         '<div class="icon-pick" id="tile-icons" role="radiogroup" aria-label="Ikonka">' + pickerHtml(newIcon, "tile-icon") + "</div>" +
-        '<label class="check"><input type="checkbox" id="tile-once"><span>Jednorazowa<small>Nie dodawaj jej do listy czynności</small></span></label>' +
+        '<label class="check"><input type="checkbox" id="tile-keep"><span>Dodaj do stałych czynności<small>Pojawi się jako kafelek. Bez zaznaczenia zgłoszenie jest jednorazowe.</small></span></label>' +
         '<div class="row"><button class="btn primary sm" type="submit">Zgłoś</button><button type="button" class="btn ghost sm" data-action="cancel-chore">Anuluj</button></div></form>'
       : '<button type="button" class="tile add" data-action="add-chore"><span class="ic">+</span><span class="tname">Inna czynność</span></button>';
     el.innerHTML = html;
@@ -335,42 +337,53 @@ function renderPeople(es, series) {
   }).join("");
 }
 
-// Udział w obowiązkach: diagram kołowy (pierścień) z sumą w środku i listą procentów
+// wspólny diagram kołowy (pierścień): parts = [{ label, n, color, aria?, tip }]
+function donutHtml(id, parts, centerValue, centerLabel, aria) {
+  const shown = parts.filter(q => q.n > 0), total = shown.reduce((a, q) => a + q.n, 0);
+  const S = 184, R = 74, T = 26, c = S / 2, trim = shown.length > 1 ? 1 / R : 0;   // 2 px przerwy między kawałkami
+  const pt = a => (c + R * Math.cos(a)).toFixed(2) + "," + (c + R * Math.sin(a)).toFixed(2);
+  let a = -Math.PI / 2, arcs = "";
+  shown.forEach(q => {
+    const i = parts.indexOf(q), sweep = q.n / total * Math.PI * 2, style = ' style="stroke:' + q.color + '" stroke-width="' + T + '"';
+    const al = ' role="img" aria-label="' + esc(q.aria || (q.label + ": " + q.n)) + '"';
+    if (shown.length === 1) arcs += '<circle class="seg-arc" data-i="' + i + '" tabindex="0" cx="' + c + '" cy="' + c + '" r="' + R + '"' + style + al + "/>";
+    else {
+      const a0 = a + trim, a1 = Math.max(a0 + 0.02, a + sweep - trim);
+      arcs += '<path class="seg-arc" data-i="' + i + '" tabindex="0" d="M' + pt(a0) + " A" + R + "," + R + " 0 " + (a1 - a0 > Math.PI ? 1 : 0) + " 1 " + pt(a1) + '"' + style + al + "/>";
+    }
+    a += sweep;
+  });
+  if (!shown.length) arcs = '<circle cx="' + c + '" cy="' + c + '" r="' + R + '" fill="none" style="stroke:var(--line-2)" stroke-width="' + T + '"/>';
+  return '<div class="donut" id="' + id + '"><svg viewBox="0 0 ' + S + " " + S + '" aria-label="' + esc(aria) + '">' + arcs + "</svg>" +
+    '<div class="donut-mid"><b>' + esc(centerValue) + "</b><span>" + esc(centerLabel) + "</span></div></div>";
+}
+function bindDonut(id, parts) {
+  const dn = document.getElementById(id); if (!dn) return;
+  dn.querySelectorAll(".seg-arc").forEach(node => {
+    const q = parts[Number(node.dataset.i)];
+    bindTip(node, q.tip, on => { dn.classList.toggle("dim", on); node.classList.toggle("hot", on); });
+  });
+}
+
+// Udział w obowiązkach: diagram kołowy z sumą w środku i listą procentów
 function renderShare(es, series) {
   const el = $("#share-card");
   if (!es.length) { el.innerHTML = '<p class="chart-sub">Brak wpisów w tym okresie.</p>'; return; }
   const total = es.length, pct = n => Math.round(n / total * 100);
-  let parts = series.map(m => ({ m, n: es.filter(e => e.m === m.id).length })).filter(p => p.n > 0);
+  let parts = series.map(m => ({ m, n: es.filter(e => e.m === m.id).length })).filter(q => q.n > 0);
   if (parts.length > 6) {   // najwyżej 6 kawałków, reszta jako „Pozostali”
-    const keep = new Set(parts.slice().sort((a, b) => b.n - a.n).slice(0, 5).map(p => p.m.id));
-    const rest = parts.filter(p => !keep.has(p.m.id));
-    parts = parts.filter(p => keep.has(p.m.id)).concat([{ m: { id: "_rest", name: "Pozostali", slot: null }, n: rest.reduce((a, p) => a + p.n, 0), rest }]);
+    const keep = new Set(parts.slice().sort((a, b) => b.n - a.n).slice(0, 5).map(q => q.m.id));
+    const rest = parts.filter(q => !keep.has(q.m.id));
+    parts = parts.filter(q => keep.has(q.m.id)).concat([{ m: { id: "_rest", name: "Pozostali", slot: null }, n: rest.reduce((a, q) => a + q.n, 0), rest }]);
   }
   const col = slot => slot == null ? "var(--axis)" : "var(--s" + slot + ")";
-  const S = 184, R = 74, T = 26, c = S / 2, trim = parts.length > 1 ? 1 / R : 0;   // 2 px przerwy między kawałkami
-  const pt = a => (c + R * Math.cos(a)).toFixed(2) + "," + (c + R * Math.sin(a)).toFixed(2);
-  let a = -Math.PI / 2, arcs = "";
-  parts.forEach((p, i) => {
-    const sweep = p.n / total * Math.PI * 2, style = ' style="stroke:' + col(p.m.slot) + '" stroke-width="' + T + '"';
-    const aria = ' role="img" aria-label="' + esc(p.m.name + ": " + p.n + " (" + pct(p.n) + "%)") + '"';
-    if (parts.length === 1) arcs += '<circle class="seg-arc" data-i="0" tabindex="0" cx="' + c + '" cy="' + c + '" r="' + R + '"' + style + aria + "/>";
-    else {
-      const a0 = a + trim, a1 = Math.max(a0 + 0.02, a + sweep - trim);
-      arcs += '<path class="seg-arc" data-i="' + i + '" tabindex="0" d="M' + pt(a0) + " A" + R + "," + R + " 0 " + (a1 - a0 > Math.PI ? 1 : 0) + " 1 " + pt(a1) + '"' + style + aria + "/>";
-    }
-    a += sweep;
-  });
-  el.innerHTML = '<div class="donut-wrap"><div class="donut" id="donut"><svg viewBox="0 0 ' + S + " " + S + '" aria-label="Diagram kołowy: udział w ' + total + ' czynnościach">' + arcs + "</svg>" +
-    '<div class="donut-mid"><b>' + total + "</b><span>" + czynnosc(total) + "</span></div></div>" +
-    '<ul class="list share-list">' + parts.map(p => '<li><i style="--c:' + col(p.m.slot) + '"></i><span class="pct">' + pct(p.n) + "%</span><span>" + esc(p.m.name) + '</span><span class="cnt-n">· ' + p.n + "</span></li>").join("") + "</ul></div>";
-  const dn = $("#donut");
-  dn.querySelectorAll(".seg-arc").forEach(node => {
-    const p = parts[Number(node.dataset.i)];
-    bindTip(node, () => ({ title: p.m.name + " · " + pct(p.n) + "%", rows: p.rest
-        ? p.rest.map(r => ({ slot: r.m.slot, label: r.m.name, value: String(r.n) }))
-        : [{ slot: p.m.slot, label: "z " + total + " " + czynnosc(total), value: String(p.n) }] }),
-      on => { dn.classList.toggle("dim", on); node.classList.toggle("hot", on); });
-  });
+  const dparts = parts.map(q => ({ label: q.m.name, n: q.n, color: col(q.m.slot), aria: q.m.name + ": " + q.n + " (" + pct(q.n) + "%)",
+    tip: () => ({ title: q.m.name + " · " + pct(q.n) + "%", rows: q.rest
+      ? q.rest.map(r => ({ slot: r.m.slot, label: r.m.name, value: String(r.n) }))
+      : [{ slot: q.m.slot, label: "z " + total + " " + czynnosc(total), value: String(q.n) }] }) }));
+  el.innerHTML = '<div class="donut-wrap">' + donutHtml("donut", dparts, String(total), czynnosc(total), "Diagram kołowy: udział w " + total + " czynnościach") +
+    '<ul class="list share-list">' + parts.map(q => '<li><i style="--c:' + col(q.m.slot) + '"></i><span class="pct">' + pct(q.n) + "%</span><span>" + esc(q.m.name) + '</span><span class="cnt-n">· ' + q.n + "</span></li>").join("") + "</ul></div>";
+  bindDonut("donut", dparts);
 }
 
 // skala osi: okrągłe wartości, najwyżej 4 podziałki
@@ -439,6 +452,44 @@ function renderTimeChart(buckets, series) {
   });
 }
 
+// wspólna obsługa wskaźnika na wykresach liniowych: pionowa linia, kropki i podpowiedź; mysz, palec i strzałki
+function bindCrosshair(svg, o) {
+  const cross = svg.querySelector(".cross"), hov = svg.querySelector(".hov"), hit = svg.querySelector(".trend-hit");
+  let cur = -1;
+  const pick = clientX => {
+    const r = svg.getBoundingClientRect(), sx = (clientX - r.left) * (o.W / r.width);
+    return Math.max(0, Math.min(o.last, o.n === 1 ? 0 : Math.round((sx - o.padL) / (o.plotW / (o.n - 1)))));
+  };
+  const show = i => {
+    if (tipOwner && tipOwner.node !== hit) hideTip();
+    cur = i;
+    tipOwner = { node: hit, off: () => { cross.setAttribute("visibility", "hidden"); hov.innerHTML = ""; } };
+    cross.setAttribute("x1", o.x(i)); cross.setAttribute("x2", o.x(i)); cross.setAttribute("visibility", "visible");
+    hov.innerHTML = o.dots(i);
+    const r = svg.getBoundingClientRect(), k = r.width / o.W, px = r.left + o.x(i) * k;
+    showTip({ left: px, right: px, width: 0, top: r.top + o.padT * k, bottom: r.top + (o.padT + o.plotH) * k, height: o.plotH * k }, o.tip(i));
+  };
+  hit.addEventListener("pointerdown", e => show(pick(e.clientX)));
+  hit.addEventListener("pointermove", e => show(pick(e.clientX)));
+  hit.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideTip(); });
+  hit.addEventListener("focus", () => show(cur >= 0 ? cur : o.last));
+  hit.addEventListener("blur", hideTip);
+  hit.addEventListener("keydown", e => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
+    e.preventDefault();
+    show(Math.max(0, Math.min(o.last, (cur < 0 ? o.last : cur) + (e.key === "ArrowLeft" ? -1 : 1))));
+  });
+}
+const crossHtml = (padT, plotH, padL, plotW, label) => '<line class="cross" visibility="hidden" y1="' + padT + '" y2="' + (padT + plotH) + '"/><g class="hov"></g>' +
+  '<rect class="trend-hit" tabindex="0" aria-label="' + esc(label) + '" x="' + (padL - 10) + '" y="0" width="' + (plotW + 20) + '" height="' + (padT + plotH + 6) + '"/>';
+const edgeAnchor = n => i => n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle";
+function gridHtml(W, padL, padR, top, step, y) {
+  let s = "";
+  for (let v = step; v <= top; v += step) s += '<line class="gl" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>';
+  for (let v = 0; v <= top; v += step) s += '<text class="ax" x="' + (padL - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>";
+  return s;
+}
+
 // wykres liniowy: suma czynności narastająco, osobna linia dla każdej osoby
 function renderTrend(buckets, series) {
   const box = $("#chart-trend");
@@ -454,50 +505,142 @@ function renderTrend(buckets, series) {
   const W = Math.max(260, box.clientWidth || 320), H = two ? 224 : 210;
   const padL = 26, padR = 10, padT = 14, padB = two ? 34 : 20;
   const plotW = W - padL - padR, plotH = H - padT - padB, n = buckets.length;
-  const x = i => n === 1 ? padL + plotW / 2 : padL + plotW * i / (n - 1);
+  const few = n <= 10, inset = few ? plotW / n / 2 : 0;   // mało punktów: margines pół kolumny, żeby podpisy dat się nie nakładały
+  const x = i => n === 1 ? padL + plotW / 2 : padL + inset + (plotW - 2 * inset) * i / (n - 1);
   const y = v => padT + plotH - (v / top) * plotH;
-  const dodge = si => (si - (series.length - 1) / 2) * 2.5;   // równe wyniki: linie obok siebie zamiast jedna na drugiej
-  const yl = (v, si) => y(v) + dodge(si);
+  const yl = (v, si) => y(v) + (si - (series.length - 1) / 2) * 2.5;   // równe wyniki: linie obok siebie zamiast jedna na drugiej
   let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Wykres liniowy: suma czynności narastająco">';
-  for (let v = step; v <= top; v += step) s += '<line class="gl" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>';
-  for (let v = 0; v <= top; v += step) s += '<text class="ax" x="' + (padL - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>";
+  s += gridHtml(W, padL, padR, top, step, y);
   s += '<line class="base" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
-  s += axisLabels(buckets, x, H, padB, i => n > 1 && i === 0 ? "start" : n > 1 && i === n - 1 ? "end" : "middle");
+  s += axisLabels(buckets, x, H, padB, few ? null : edgeAnchor(n));
   series.forEach((m, si) => {
     const pts = cum[si].slice(0, last + 1).map((v, i) => x(i).toFixed(1) + "," + yl(v, si).toFixed(1));
     if (pts.length > 1) s += '<path class="tr-line" style="stroke:var(--s' + m.slot + ')" d="M' + pts.join("L") + '"/>';
     s += '<circle class="tr-dot" r="4.5" cx="' + x(last).toFixed(1) + '" cy="' + yl(cum[si][last], si).toFixed(1) + '" style="fill:var(--s' + m.slot + ')"/>';
   });
-  s += '<line class="cross" visibility="hidden" y1="' + padT + '" y2="' + (padT + plotH) + '"/><g class="hov"></g>';
-  s += '<rect class="trend-hit" tabindex="0" aria-label="Wykres liniowy: użyj strzałek, żeby zobaczyć kolejne liczby" x="' + (padL - 10) + '" y="0" width="' + (plotW + 20) + '" height="' + (padT + plotH + 6) + '"/>';
-  s += "</svg>";
+  s += crossHtml(padT, plotH, padL, plotW, "Wykres liniowy: użyj strzałek, żeby zobaczyć kolejne liczby") + "</svg>";
   box.innerHTML = s;
-  const svg = box.querySelector("svg"), cross = svg.querySelector(".cross"), hov = svg.querySelector(".hov"), hit = svg.querySelector(".trend-hit");
-  let cur = -1;
-  const pick = clientX => {
-    const r = svg.getBoundingClientRect(), sx = (clientX - r.left) * (W / r.width);
-    return Math.max(0, Math.min(last, n === 1 ? 0 : Math.round((sx - padL) / (plotW / (n - 1)))));
-  };
-  const show = i => {
-    if (tipOwner && tipOwner.node !== hit) hideTip();
-    cur = i;
-    tipOwner = { node: hit, off: () => { cross.setAttribute("visibility", "hidden"); hov.innerHTML = ""; } };
-    cross.setAttribute("x1", x(i)); cross.setAttribute("x2", x(i)); cross.setAttribute("visibility", "visible");
-    hov.innerHTML = series.map((m, si) => '<circle class="tr-dot" r="4.5" cx="' + x(i) + '" cy="' + yl(cum[si][i], si) + '" style="fill:var(--s' + m.slot + ')"/>').join("");
-    const r = svg.getBoundingClientRect(), k = r.width / W, px = r.left + x(i) * k;
-    showTip({ left: px, right: px, width: 0, top: r.top + padT * k, bottom: r.top + (padT + plotH) * k, height: plotH * k },
-      { title: buckets[i].asOf + " · razem " + cum.reduce((acc, c) => acc + c[i], 0), rows: series.map((m, si) => ({ slot: m.slot, label: m.name, value: String(cum[si][i]) })) });
-  };
-  hit.addEventListener("pointerdown", e => show(pick(e.clientX)));
-  hit.addEventListener("pointermove", e => show(pick(e.clientX)));
-  hit.addEventListener("pointerleave", e => { if (e.pointerType === "mouse") hideTip(); });
-  hit.addEventListener("focus", () => show(cur >= 0 ? cur : last));
-  hit.addEventListener("blur", hideTip);
-  hit.addEventListener("keydown", e => {
-    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight") return;
-    e.preventDefault();
-    show(Math.max(0, Math.min(last, (cur < 0 ? last : cur) + (e.key === "ArrowLeft" ? -1 : 1))));
+  bindCrosshair(box.querySelector("svg"), { W, padL: padL + inset, plotW: plotW - 2 * inset, padT, plotH, n, last, x,
+    dots: i => series.map((m, si) => '<circle class="tr-dot" r="4.5" cx="' + x(i) + '" cy="' + yl(cum[si][i], si) + '" style="fill:var(--s' + m.slot + ')"/>').join(""),
+    tip: i => ({ title: buckets[i].asOf + " · razem " + cum.reduce((acc, c) => acc + c[i], 0), rows: series.map((m, si) => ({ slot: m.slot, label: m.name, value: String(cum[si][i]) })) }) });
+}
+
+/* ---------- wyniki jednej osoby ---------- */
+const dniW = n => n === 1 ? "dzień" : "dni";
+const fmt1 = x => x.toLocaleString("pl-PL", { maximumFractionDigits: 1 });
+const DAY_PARTS = [["Rano", 5, 12], ["Popołudnie", 12, 17], ["Wieczór", 17, 22], ["Noc", 22, 5]];
+const partOf = h => h >= 5 && h < 12 ? 0 : h >= 12 && h < 17 ? 1 : h >= 17 && h < 22 ? 2 : 3;
+// odcienie koloru osoby: im więcej, tym dalej od tła (w obu motywach)
+const shade = (slot, k) => k >= 1 ? "var(--s" + slot + ")" : "color-mix(in srgb, var(--s" + slot + ") " + Math.round(k * 100) + "%, var(--ink))";
+
+function renderPerson(buckets, es, series) {
+  const pick = $("#person-pick"), stats = $("#person-stats");
+  if (!series.length) {
+    pick.innerHTML = ""; stats.innerHTML = ""; $("#person-meta").textContent = "";
+    $("#chart-person").innerHTML = '<p class="chart-sub">Gdy dodasz domowników, zobaczysz tu wyniki każdej osoby.</p>';
+    $("#person-donut").innerHTML = "";
+    return;
+  }
+  if (!series.some(m => m.id === personSel)) personSel = (series.find(m => m.id === selected) || series[0]).id;
+  const p = memberOf(personSel), mine = es.filter(e => e.m === p.id), day = range === "day";
+  pick.innerHTML = series.map(m => '<button type="button" class="chip' + (m.id === p.id ? " on" : "") + '" role="radio" aria-checked="' + (m.id === p.id) + '" data-action="person" data-id="' + esc(m.id) + '" style="' + cvar(m.slot) + '">' + avatar(m) + "<span>" + esc(m.name) + "</span></button>").join("");
+  $("#person-meta").textContent = mine.length + " " + czynnosc(mine.length);
+  const st = [];
+  if (day) {
+    const ts = mine.map(e => e.t).sort((a, b) => a - b);
+    st.push(["Razem dziś", String(mine.length)]);
+    if (ts.length) st.push(["Pierwsza", hhmm(ts[0])]);
+    if (ts.length > 1) st.push(["Ostatnia", hhmm(ts[ts.length - 1])]);
+  } else {
+    const per = buckets.map(b => b.by[p.id] || 0), max = Math.max(0, ...per), bi = per.lastIndexOf(max);
+    st.push(["Razem", String(mine.length)], ["Średnio dziennie", esc(fmt1(mine.length / per.length))]);
+    if (max > 0) st.push(["Najwięcej w jeden dzień", max + "<small>" + esc(buckets[bi].title) + "</small>"]);
+    st.push(["Dni z czynnościami", per.filter(v => v > 0).length + "<small>z " + per.length + "</small>"]);
+  }
+  stats.innerHTML = st.map(([k, v]) => "<div><dt>" + esc(k) + "</dt><dd>" + v + "</dd></div>").join("");
+  renderPersonLine(buckets, p);
+  renderPersonDonut(buckets, p, mine);
+}
+function renderPersonOnly() {
+  if (!famId || !ready()) return;
+  const es = entriesIn(periodKeys());
+  renderPerson(buildBuckets(es), es, seriesFor(es));
+}
+
+// wykres liniowy: ile czynności wybrana osoba zrobiła każdego dnia (w widoku dnia: w każdej godzinie)
+function renderPersonLine(buckets, p) {
+  const box = $("#chart-person"), day = range === "day";
+  $("#pline-h").textContent = day ? "Ile czynności w każdej godzinie" : "Ile czynności dziennie";
+  $("#pline-sub").textContent = "Przesuń palcem po wykresie, żeby zobaczyć czynności z danego " + (day ? "przedziału godzin." : "dnia.");
+  if ($("#tab-wyniki").hidden) return;
+  const n = buckets.length, last = buckets.reduce((li, b, i) => b.future ? li : i, 0);
+  const vals = buckets.map((b, i) => i > last ? null : (b.by[p.id] || 0));
+  const maxV = Math.max(0, ...vals.slice(0, last + 1));
+  const { top, step } = niceScale(Math.max(1, maxV));
+  const two = buckets.some(b => b.lines.length > 1);
+  const W = Math.max(240, box.clientWidth || 300), H = two ? 214 : 200;
+  const padL = 26, padR = 12, padT = 22, padB = two ? 34 : 20;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const few = n <= 10, inset = few ? plotW / n / 2 : 0;
+  const x = i => n === 1 ? padL + plotW / 2 : padL + inset + (plotW - 2 * inset) * i / (n - 1);
+  const y = v => padT + plotH - (v / top) * plotH;
+  const col = "var(--s" + p.slot + ")", anchor = few ? () => "middle" : edgeAnchor(n);
+  const pts = vals.slice(0, last + 1).map((v, i) => [x(i), y(v)]);
+  const xy = q => q[0].toFixed(1) + "," + q[1].toFixed(1);
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc("Wykres liniowy: ile czynności " + (day ? "w każdej godzinie" : "dziennie") + ", " + p.name) + '">';
+  s += gridHtml(W, padL, padR, top, step, y);
+  if (pts.length > 1) {
+    s += '<path class="p-area" style="fill:' + col + '" d="M' + pts[0][0].toFixed(1) + "," + y(0).toFixed(1) + pts.map(q => "L" + xy(q)).join("") + "L" + pts[pts.length - 1][0].toFixed(1) + "," + y(0).toFixed(1) + 'Z"/>';
+    s += '<path class="tr-line" style="stroke:' + col + '" d="M' + pts.map(xy).join("L") + '"/>';
+  }
+  s += '<line class="base" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+  s += axisLabels(buckets, x, H, padB, anchor);
+  const maxI = vals.slice(0, last + 1).lastIndexOf(maxV);
+  pts.forEach((q, i) => {
+    if (few || i === last) s += '<circle class="tr-dot" r="4.5" cx="' + q[0].toFixed(1) + '" cy="' + q[1].toFixed(1) + '" style="fill:' + col + '"/>';
+    if (vals[i] > 0 && (few || i === maxI)) s += '<text class="cap" x="' + q[0].toFixed(1) + '" y="' + (q[1] - 10).toFixed(1) + '" text-anchor="' + anchor(i) + '">' + vals[i] + "</text>";
   });
+  s += crossHtml(padT, plotH, padL, plotW, "Wykres liniowy: użyj strzałek, żeby zobaczyć kolejne " + (day ? "godziny" : "dni")) + "</svg>";
+  box.innerHTML = s;
+  bindCrosshair(box.querySelector("svg"), { W, padL: padL + inset, plotW: plotW - 2 * inset, padT, plotH, n, last, x,
+    dots: i => '<circle class="tr-dot" r="5" cx="' + x(i) + '" cy="' + y(vals[i]) + '" style="fill:' + col + '"/>',
+    tip: i => {
+      const list = buckets[i].list.filter(e => e.m === p.id), by = {};
+      list.forEach(e => { const k = entryName(e); by[k] = (by[k] || 0) + 1; });
+      const all = Object.entries(by).sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0], "pl"));
+      const rows = all.slice(0, 6).map(([name, c]) => ({ key: false, label: name, value: c + "×" }));
+      if (all.length > 6) rows.push({ key: false, label: "i " + (all.length - 6) + " więcej", value: "" });
+      return { title: buckets[i].title + " · " + list.length + " " + czynnosc(list.length), rows: rows.length ? rows : [{ key: false, label: "brak czynności", value: "" }] };
+    } });
+}
+
+// diagram kołowy: na ile dni przypadło 0, 1, 2, 3+ czynności (w widoku dnia: pora dnia)
+function renderPersonDonut(buckets, p, mine) {
+  const box = $("#person-donut"), day = range === "day";
+  $("#pdonut-h").textContent = day ? "O jakiej porze dnia" : "Ile czynności dziennie";
+  $("#pdonut-sub").textContent = day ? "Dzisiejsze czynności według pory dnia." : "Na ile dni przypadło 0, 1, 2 albo 3 i więcej czynności.";
+  let parts, cv, cl, unit;
+  if (day) {
+    if (!mine.length) { box.innerHTML = '<p class="chart-sub">Dziś jeszcze nic.</p>'; return; }
+    const cnt = [0, 0, 0, 0]; mine.forEach(e => cnt[partOf(new Date(e.t).getHours())]++);
+    const ks = [1, 0.75, 0.52, 0.32];
+    parts = DAY_PARTS.map(([nm, a, b], i) => ({ label: nm + " (" + a + "–" + b + ")", n: cnt[i], color: shade(p.slot, ks[i]) }));
+    cv = String(mine.length); cl = czynnosc(mine.length) + " dziś"; unit = n => String(n);
+  } else {
+    const per = buckets.map(b => b.by[p.id] || 0), cnt = [0, 0, 0, 0];
+    per.forEach(v => cnt[Math.min(3, v)]++);
+    parts = [["bez czynności", "var(--axis)"], ["1 czynność", shade(p.slot, 1)], ["2 czynności", shade(p.slot, 0.72)], ["3 i więcej", shade(p.slot, 0.45)]]
+      .map(([label, color], i) => ({ label, n: cnt[i], color }));
+    cv = fmt1(mine.length / per.length); cl = "średnio dziennie"; unit = n => n + " " + dniW(n);
+  }
+  const total = parts.reduce((a, q) => a + q.n, 0), pct = n => Math.round(n / total * 100);
+  parts.forEach(q => {
+    q.aria = q.label + ": " + unit(q.n);
+    q.tip = () => ({ title: q.label, rows: [{ color: q.color, label: day ? czynnosc(q.n) : "", value: unit(q.n) + " (" + pct(q.n) + "%)" }] });
+  });
+  box.innerHTML = '<div class="donut-wrap">' + donutHtml("pdonut", parts, cv, cl, (day ? "Diagram kołowy: pora dnia, " : "Diagram kołowy: ile czynności dziennie, ") + p.name) +
+    '<ul class="list share-list">' + parts.map(q => "<li" + (q.n ? "" : ' class="zero-row"') + '><i style="--c:' + q.color + '"></i><span class="pct">' + esc(unit(q.n)) + "</span><span>" + esc(q.label) + "</span></li>").join("") + "</ul></div>";
+  bindDonut("pdonut", parts);
 }
 
 function renderChoreChart(es, series) {
@@ -579,7 +722,8 @@ function renderResults() {
   const keys = periodKeys();
   $("#range-label").textContent = rangeLabel(keys);
   if (!ready()) {
-    for (const id of ["#ranking", "#share-card", "#chart-daily", "#chart-trend", "#chores-chart", "#history"]) $(id).innerHTML = '<p class="loading">Wczytywanie…</p>';
+    for (const id of ["#ranking", "#share-card", "#chart-daily", "#chart-trend", "#chart-person", "#chores-chart", "#history"]) $(id).innerHTML = '<p class="loading">Wczytywanie…</p>';
+    $("#person-donut").innerHTML = ""; $("#person-pick").innerHTML = ""; $("#person-stats").innerHTML = "";
     $("#week-table").innerHTML = ""; $("#rank-meta").textContent = ""; $("#hist-meta").textContent = "";
     return;
   }
@@ -588,6 +732,7 @@ function renderResults() {
   renderShare(es, series);
   renderTimeChart(buckets, series);
   renderTrend(buckets, series);
+  renderPerson(buckets, es, series);
   renderChoreChart(es, series);
   renderTable(buckets, es, series);
   renderHistory(es);
@@ -601,10 +746,13 @@ function showTip(target, data) {
   const t = document.createElement("div"); t.className = "tip-t"; t.textContent = data.title; tipEl.appendChild(t);
   for (const r of data.rows) {
     const row = document.createElement("div"); row.className = "tip-r";
-    const i = document.createElement("i"); i.setAttribute("style", r.slot == null ? "--c:var(--axis)" : cvar(r.slot));
+    if (r.key !== false) {
+      const i = document.createElement("i"); i.setAttribute("style", r.color ? "--c:" + r.color : r.slot == null ? "--c:var(--axis)" : cvar(r.slot));
+      row.append(i);
+    } else row.classList.add("nokey");
     const b = document.createElement("b"); b.textContent = r.value;
     const sp = document.createElement("span"); sp.textContent = r.label;
-    row.append(i, b, sp); tipEl.appendChild(row);
+    row.append(b, sp); tipEl.appendChild(row);
   }
   tipEl.hidden = false;
   const rc = target.getBoundingClientRect ? target.getBoundingClientRect() : target, tw = tipEl.offsetWidth, th = tipEl.offsetHeight;
@@ -625,7 +773,7 @@ document.addEventListener("pointerdown", e => { if (tipOwner && !tipOwner.node.c
 window.addEventListener("scroll", () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
 let resizeT = null;
 window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => {
-  if (famId && tab === "wyniki" && ready()) { hideTip(); const es = entriesIn(periodKeys()), series = seriesFor(es), b = buildBuckets(es); renderTimeChart(b, series); renderTrend(b, series); }
+  if (famId && tab === "wyniki" && ready()) { hideTip(); const es = entriesIn(periodKeys()), series = seriesFor(es), b = buildBuckets(es); renderTimeChart(b, series); renderTrend(b, series); renderPerson(b, es, series); }
 }, 150); });
 
 /* ---------- Ustawienia ---------- */
@@ -661,19 +809,19 @@ function renderManage() {
 }
 
 function renderAll() {
-  renderWho(); renderTiles(); renderRecent(); renderResults(); renderManage();
+  renderWho(); renderTiles(); renderNoteBox(); renderRecent(); renderResults(); renderManage();
 }
 
 /* ---------- komunikaty ---------- */
 function showNotice(msg) { const n = $("#notice"); n.textContent = msg; n.hidden = !msg; }
 function toast(msg, action, kind) {
-  const t = $("#toast");
+  const t = $("#toast"), acts = !action ? [] : Array.isArray(action) ? action : [action];
   t.className = "toast" + (kind === "err" ? " err" : "");
-  t.innerHTML = '<div class="toast-inner"><span>' + esc(msg) + "</span>" + (action ? '<button type="button" class="toast-act" data-action="toast-act">' + esc(action.label) + "</button>" : "") + "</div>";
+  t.innerHTML = '<div class="toast-inner"><span>' + esc(msg) + "</span>" + acts.map((a, i) => '<button type="button" class="toast-act" data-action="toast-act" data-i="' + i + '">' + esc(a.label) + "</button>").join("") + "</div>";
   t.hidden = false;
-  toastAction = action ? action.fn : null;
+  toastAction = acts.map(a => a.fn);
   clearTimeout(toastTimer);
-  toastTimer = setTimeout(() => { t.hidden = true; toastAction = null; }, action ? 6000 : 3800);
+  toastTimer = setTimeout(() => { t.hidden = true; toastAction = null; }, acts.length ? 6000 : 3800);
 }
 function handleErr(e) {
   console.warn(e);
@@ -689,7 +837,10 @@ function logEntry(chore) {
   const d = new Date();
   if (when === "yesterday") d.setDate(d.getDate() - 1);
   const day = keyOf(d), id = newId();
-  const note = cleanNote($("#note").value);
+  const inp = $("#note"), typed = cleanNote(inp.value), prev = noteTarget();
+  // opis wpisany do poprzednio zgłoszonej czynności zapisujemy, zanim zgłosimy następną
+  if (prev && typed !== prev.d) saveNote(prev, typed, true);
+  const note = prev ? "" : typed;
   const data = { m: m.id, mn: m.name, ms: m.slot, c: chore.once ? ONCE : chore.id, cn: chore.name, ci: chore.icon || guessIcon(chore.name), day, t: d.getTime() };
   if (chore.once) data.once = true;
   if (note) data.d = note;
@@ -698,13 +849,49 @@ function logEntry(chore) {
     const btn = document.querySelector('#tiles .tile[data-id="' + CSS.escape(chore.id) + '"]');
     if (btn) { btn.classList.remove("flash"); void btn.offsetWidth; btn.classList.add("flash"); }
   }
-  $("#note").value = "";
   const ref = fdoc("entries", id);
-  toast(m.name + ": " + chore.name + (when === "yesterday" ? " (wczoraj)" : ""), { label: "Cofnij", fn: () => {
-    deleteDoc(ref).then(() => toast("Cofnięto wpis.")).catch(handleErr);
-  } });
+  lastLogged = { id, name: chore.name, icon: data.ci, who: m.name, t: d.getTime(), at: Date.now(), d: note };
+  inp.value = note; renderNoteBox();
+  toast(m.name + ": " + chore.name + (chore.once ? " (jednorazowa)" : "") + (when === "yesterday" ? " (wczoraj)" : ""), [
+    { label: "Opis", fn: () => { if (lastLogged && lastLogged.id === id) { const n = $("#note"); n.scrollIntoView({ block: "center", behavior: "smooth" }); n.focus({ preventScroll: true }); } } },
+    { label: "Cofnij", fn: () => { forgetNoteTarget(id); deleteDoc(ref).then(() => toast("Cofnięto wpis.")).catch(handleErr); } }
+  ]);
   setDoc(ref, data).catch(handleErr);
   return true;
+}
+
+// opis pod kafelkami: przed dotknięciem czynności dołącza się do niej, po zgłoszeniu dotyczy właśnie zgłoszonej
+function noteTarget() {
+  const t = lastLogged;
+  if (!t) return null;
+  const gone = loaded.entries && Date.now() - t.at > 4000 && !ENT.some(e => e.id === t.id);   // cofnięta albo usunięta
+  if (gone || Date.now() - t.at > 30 * 60000) { lastLogged = null; return null; }
+  return t;
+}
+function forgetNoteTarget(id) {
+  if (lastLogged && lastLogged.id === id) { lastLogged = null; $("#note").value = ""; renderNoteBox(); }
+}
+function saveNote(target, text, quiet) {
+  const d = cleanNote(text);
+  target.d = d;
+  updateDoc(fdoc("entries", target.id), { d }).then(() => { if (!quiet) toast(d ? "Zapisano opis." : "Usunięto opis."); }).catch(handleErr);
+}
+function renderNoteBox() {
+  const inp = $("#note"); if (!inp) return;
+  const t = noteTarget(), mode = t ? "t:" + t.id : "next";
+  if (mode !== noteMode) {
+    if (mode === "next" && document.activeElement !== inp) inp.value = "";
+    noteMode = mode;
+  }
+  $("#note-box").classList.toggle("target", !!t);
+  $("#note-lbl").textContent = t ? "Opis do zgłoszonej czynności" : "Opis (nieobowiązkowy)";
+  $("#note-target").hidden = !t; $("#note-save").hidden = !t; $("#note-close").hidden = !t;
+  if (t) $("#note-target").innerHTML = '<span class="ic xs">' + iconSvg(iconKey(t.icon, t.name)) + "</span><b>" + esc(t.name) + "</b><span>· " + esc(t.who) + " · " + hhmm(t.t) + "</span>";
+  inp.placeholder = t ? "Np. dwa prania" : "Np. umyłem też blaty";
+  const saved = t && cleanNote(inp.value) === t.d;
+  $("#note-hint").textContent = !t ? "Wpisz przed dotknięciem czynności albo zaraz po niej."
+    : saved && t.d ? "Opis zapisany. Możesz go jeszcze poprawić."
+    : "Nieobowiązkowe. Zapisz przyciskiem albo klawiszem Enter.";
 }
 
 async function addMember(raw) {
@@ -781,6 +968,9 @@ document.addEventListener("click", e => {
   if (a === "pick") { selected = id; lsSet("dd.member." + famId, selected); renderWho(); renderTiles(); }
   else if (a === "tab") { setTab(b.dataset.tab); }
   else if (a === "when") { when = b.dataset.when; renderSegs(); }
+  else if (a === "person") { personSel = id; lsSet("dd.person." + famId, id); hideTip(); renderPersonOnly(); }
+  else if (a === "note-save") { const t = noteTarget(); if (t) { saveNote(t, $("#note").value); renderNoteBox(); } }
+  else if (a === "note-close") { lastLogged = null; $("#note").value = ""; renderNoteBox(); }
   else if (a === "range") { range = RANGES.includes(b.dataset.range) ? b.dataset.range : "day"; lsSet("dd.range", range); showAllHist = false; hideTip(); renderSegs(); renderResults(); }
   else if (a === "log") { const c = chores.find(x => x.id === id); if (c) logEntry({ id: c.id, name: c.name, icon: choreIcon(c) }); }
   else if (a === "add-chore") { addingChore = true; newIcon = "check"; newIconManual = false; renderTiles(true); const i = $("#tile-chore"); if (i) i.focus(); }
@@ -793,8 +983,8 @@ document.addEventListener("click", e => {
   else if (a === "rename-cancel") { editMember = null; if (document.activeElement) document.activeElement.blur(); renderManage(); }
   else if (a === "open-manage") { openManage(); }
   else if (a === "close-manage") { closeManage(); }
-  else if (a === "toast-act") { const f = toastAction; toastAction = null; $("#toast").hidden = true; if (f) f(); }
-  else if (a === "del") { confirmThen(b, "Na pewno?", () => { deleteDoc(fdoc("entries", id)).then(() => toast("Usunięto wpis.")).catch(handleErr); }); }
+  else if (a === "toast-act") { const f = toastAction && toastAction[Number(b.dataset.i) || 0]; toastAction = null; $("#toast").hidden = true; if (f) f(); }
+  else if (a === "del") { confirmThen(b, "Na pewno?", () => { forgetNoteTarget(id); deleteDoc(fdoc("entries", id)).then(() => toast("Usunięto wpis.")).catch(handleErr); }); }
   else if (a === "note") { editNote = id; renderRecent(); renderResults(); const f = $("#tab-" + tab).querySelector('form[data-form="note"][data-id="' + CSS.escape(id) + '"] input'); if (f) f.focus(); }
   else if (a === "note-cancel") { editNote = null; if (document.activeElement) document.activeElement.blur(); renderRecent(); renderResults(); }
   else if (a === "more-hist") { showAllHist = !showAllHist; renderResults(); }
@@ -812,6 +1002,7 @@ document.addEventListener("input", e => {
   const t = e.target;
   if (t.id === "tile-chore" && !newIconManual) { newIcon = guessIcon(t.value); const p = $("#tile-icons"); if (p) markPicker(p, newIcon); }
   if (t.id === "c-name" && !mIconManual) { mIcon = guessIcon(t.value); markPicker($("#c-icons"), mIcon); }
+  if (t.id === "note") renderNoteBox();
   if (t.classList && t.classList.contains("pin")) {
     const v = t.value.replace(/\D/g, "").slice(0, 4);
     if (v !== t.value) t.value = v;
@@ -839,8 +1030,9 @@ document.addEventListener("submit", async e => {
     const name = clean(val, 80);
     if (!name) { toast("Wpisz, co zostało zrobione.", null, "err"); return; }
     if (!selected) { toast("Najpierw wybierz, kto to zrobił.", null, "err"); return; }
-    const once = $("#tile-once").checked;
-    const ch = once ? { once: true, name, icon: newIcon } : addChore(name, newIcon);
+    // czynność o tej samej nazwie już jest na liście → zgłaszamy ją; inaczej jednorazowa, chyba że zaznaczono „Dodaj do stałych”
+    const keep = $("#tile-keep").checked, same = chores.find(c => norm(c.name) === norm(name));
+    const ch = same ? { id: same.id, name: same.name, icon: choreIcon(same) } : keep ? addChore(name, newIcon) : { once: true, name, icon: newIcon };
     if (input) input.blur();
     if (logEntry(ch)) { addingChore = false; renderTiles(true); }
   } else if (kind === "note") {
@@ -857,6 +1049,11 @@ document.addEventListener("submit", async e => {
 });
 
 document.addEventListener("keydown", e => {
+  if (e.key === "Enter" && e.target.id === "note") {
+    const t = noteTarget();
+    if (t) { e.preventDefault(); saveNote(t, e.target.value); e.target.blur(); renderNoteBox(); }
+    return;
+  }
   if (e.key === "Escape") { if (!tipEl.hidden) hideTip(); else if (!$("#manage").hidden) closeManage(); }
 });
 window.addEventListener("hashchange", () => { const t = location.hash.slice(1); if ((t === "zglos" || t === "wyniki") && t !== tab) setTab(t); });
@@ -1138,7 +1335,8 @@ function startSession(user) {
   if (famId === user.uid) return;
   endSession();
   famId = user.uid; famName = ""; loginNote = "";
-  selected = lsGet("dd.member." + famId);
+  selected = lsGet("dd.member." + famId); personSel = lsGet("dd.person." + famId);
+  lastLogged = null; noteMode = "next"; $("#note").value = "";
   editNote = null; editMember = null; iconEdit = null; addingChore = false; showAllHist = false;
   $("#login").hidden = true; $("#app").hidden = false;
   showNotice("");
@@ -1147,7 +1345,8 @@ function startSession(user) {
 function endSession() {
   if (!famId) return;
   unsubscribeAll(); closeManage(); hideTip();
-  famId = null; famName = ""; selected = null;
+  famId = null; famName = ""; selected = null; personSel = null; lastLogged = null; noteMode = "next";
+  $("#note").value = "";
   $("#app").hidden = true;
 }
 
