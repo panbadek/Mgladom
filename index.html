@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261031-005456">
+<link rel="manifest" href="manifest.json?v=20261101-192029">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -200,6 +200,11 @@ input.pin::placeholder{ letter-spacing:.3em }
 @media (min-width:900px){ .res{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:48px } .res > .wide{ grid-column:1 / -1 } }
 .filters{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r) }
 .filters .lbl2{ font-weight:700 }
+.month-nav{ display:inline-flex; align-items:center; gap:4px }
+.mnav{ display:grid; place-items:center; width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--ink); cursor:pointer; padding:0 }
+.mnav svg{ width:20px; height:20px }
+.mnav:disabled{ opacity:.35; cursor:not-allowed }
+.month-label{ min-width:9.5rem; text-align:center; font-family:var(--font-display); font-weight:700; font-size:18px }
 
 .trow{ display:grid; grid-template-columns:minmax(0,1fr) auto; align-items:center; gap:8px 12px; padding:12px 0; border-bottom:1px solid var(--line-2) }
 .who-cell{ display:flex; align-items:center; gap:10px; min-width:0 }
@@ -483,7 +488,14 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
         <div class="seg" role="radiogroup" aria-label="Okres wyników">
           <button type="button" role="radio" aria-checked="true" data-action="range" data-range="day">Dziś</button>
           <button type="button" role="radio" aria-checked="false" data-action="range" data-range="7">7 dni</button>
-          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="month" id="range-month">Ten miesiąc</button>
+          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="month" id="range-month">Miesiąc</button>
+        </div>
+        <div id="month-nav" class="month-nav" hidden>
+          <button type="button" class="mnav" id="month-prev" data-action="month-prev" aria-label="Poprzedni miesiąc">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M14.5 5.5L8 12l6.5 6.5"/></svg></button>
+          <span id="month-label" class="month-label" aria-live="polite"></span>
+          <button type="button" class="mnav" id="month-next" data-action="month-next" aria-label="Następny miesiąc">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M9.5 5.5L16 12l-6.5 6.5"/></svg></button>
         </div>
         <span id="range-label" class="sec-meta"></span>
       </div>
@@ -625,5 +637,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261031-005456"></script>
+<script type="module" src="app.js?v=20261101-192029"></script>
 </body></html>

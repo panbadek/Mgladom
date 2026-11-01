@@ -3,12 +3,12 @@ import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signI
   signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
-  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, getDoc, getDocFromServer, getDocsFromServer, writeBatch }
+  collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, orderBy as fsOrderBy, limit as fsLimit, getDoc, getDocs, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261031-005456";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261031-005456";
+import { firebaseConfig } from "./firebase-config.js?v=20261101-192029";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261101-192029";
 
-const BUILD = "20261031-005456";
+const BUILD = "20261101-192029";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -112,6 +112,14 @@ let when = "today";
 let tab = ["zglos", "wyniki"].includes(location.hash.slice(1)) ? location.hash.slice(1) : (lsGet("dd.tab") === "wyniki" ? "wyniki" : "zglos");
 const RANGES = ["day", "7", "month"];
 const MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
+// przeglądanie miesięcy: viewMonth = "RRRR-MM" (null = bieżący); dawne miesiące wczytujemy osobnym zapytaniem
+let viewMonth = null, monthData = { ym: null, list: [], loaded: false }, unsubMonth = null, firstMonth = null;
+const curMonth = () => todayK.slice(0, 7);
+const viewedMonth = () => viewMonth && viewMonth < curMonth() ? viewMonth : curMonth();
+const isPastMonth = () => range === "month" && viewedMonth() < curMonth();
+const monthAdd = (ym, d) => { const [Y, M] = ym.split("-").map(Number), dt = new Date(Y, M - 1 + d, 1); return dt.getFullYear() + "-" + pad(dt.getMonth() + 1); };
+const monthName = ym => { const [Y, M] = ym.split("-").map(Number); return MONTHS[M - 1] + " " + Y; };
+const MONTHS_BACK = 36;   // gdy nie wiadomo, od kiedy są wpisy
 let range = (v => v === "30" ? "month" : RANGES.includes(v) ? v : "day")(lsGet("dd.range"));
 let todayK = keyOf(new Date());
 let showAllHist = false, addingChore = false, tilesSig = "";
@@ -164,7 +172,7 @@ function parseEntry(d) {
 }
 function rebuildGhosts() {
   ghostM = {}; ghostC = {};
-  for (const e of ENT) {
+  for (const e of ENT.concat(monthData.list)) {
     if (!ghostM[e.m]) ghostM[e.m] = { id: e.m, name: e.mn || "Usunięta osoba", slot: e.ms, order: 1e15 };
     if (!e.once && !ghostC[e.c]) ghostC[e.c] = { id: e.c, name: e.cn || "Usunięta czynność", icon: e.ci, order: 1e15 };
   }
@@ -200,7 +208,11 @@ function renderTabs() {
 function renderSegs() {
   document.querySelectorAll('[data-action="when"]').forEach(b => b.setAttribute("aria-checked", String(b.dataset.when === when)));
   document.querySelectorAll('[data-action="range"]').forEach(b => b.setAttribute("aria-checked", String(b.dataset.range === range)));
-  $("#range-month").textContent = MONTHS[new Date().getMonth()];
+  const ym = viewedMonth(), isM = range === "month", oldest = firstMonth || monthAdd(curMonth(), -MONTHS_BACK);
+  $("#month-nav").hidden = !isM;
+  $("#month-label").textContent = monthName(ym);
+  $("#month-prev").disabled = ym <= oldest;
+  $("#month-next").disabled = ym >= curMonth();
 }
 
 function entryRow(e) {
@@ -278,10 +290,46 @@ function renderRecent() {
 function periodKeys() {
   if (range === "day") return [todayK];
   if (range === "7") return keysFor(7);
-  return keysFor(new Date().getDate());
+  const ym = viewedMonth(), [Y, M] = ym.split("-").map(Number);
+  const days = ym === curMonth() ? Number(todayK.slice(8)) : new Date(Y, M, 0).getDate();   // bieżący: do dziś, dawny: cały
+  return Array.from({ length: days }, (_, i) => ym + "-" + pad(i + 1));
 }
 function rangeLabel(keys) {
-  return range === "day" ? "Dziś, " + fmtDM(todayK) : fmtDM(keys[0]) + " – " + fmtDM(keys[keys.length - 1]);
+  if (range === "day") return "Dziś, " + fmtDM(todayK);
+  if (range === "month" && !isPastMonth()) return "od " + fmtDM(keys[0]) + " do dziś";
+  return fmtDM(keys[0]) + " – " + fmtDM(keys[keys.length - 1]);
+}
+// wpisy z wybranego okresu: dawny miesiąc z osobnego zapytania, reszta z bieżących danych
+function periodEntries(keys) { return isPastMonth() ? monthData.list : entriesIn(keys); }
+function resultsReady() { return ready() && (!isPastMonth() || (monthData.ym === viewedMonth() && monthData.loaded)); }
+// subskrypcja wpisów oglądanego dawnego miesiąca (tylko jedna naraz)
+function ensureMonth() {
+  const ym = famId && isPastMonth() ? viewedMonth() : null;
+  if (!ym) {
+    if (unsubMonth) { unsubMonth(); unsubMonth = null; }
+    if (monthData.ym) { monthData = { ym: null, list: [], loaded: false }; rebuildGhosts(); }
+    return;
+  }
+  if (monthData.ym === ym) return;
+  if (unsubMonth) unsubMonth();
+  monthData = { ym, list: [], loaded: false };
+  unsubMonth = onSnapshot(query(fcol("entries"), where("day", ">=", ym + "-01"), where("day", "<=", ym + "-31")), s => {
+    if (monthData.ym !== ym) return;
+    monthData.list = s.docs.map(parseEntry).filter(Boolean).sort((a, b) => b.t - a.t);
+    monthData.loaded = true; rebuildGhosts(); renderResults();
+  }, subErr);
+}
+// najstarszy miesiąc z wpisami (granica strzałki „wstecz”)
+async function loadFirstMonth() {
+  if (!famId) return;
+  const fid = famId;
+  try {
+    const s = await getDocs(query(fcol("entries"), fsOrderBy("day"), fsLimit(1)));
+    if (famId !== fid) return;
+    const d = s.empty ? "" : String(s.docs[0].data().day || "");
+    firstMonth = /^\d{4}-\d\d/.test(d) ? d.slice(0, 7) : curMonth();
+  } catch (e) { console.warn("najstarszy miesiąc:", e); firstMonth = null; }
+  renderSegs();
 }
 const legendHtml = series => series.length < 2 ? "" : series.map(m => '<span class="lg"><i style="' + cvar(m.slot) + '"></i>' + esc(m.name) + "</span>").join("");
 const capFirst = s => s.charAt(0).toUpperCase() + s.slice(1);
@@ -562,8 +610,8 @@ function renderPerson(buckets, es, series) {
   renderPersonDonut(buckets, p, mine);
 }
 function renderPersonOnly() {
-  if (!famId || !ready()) return;
-  const es = entriesIn(periodKeys());
+  if (!famId || !resultsReady()) return;
+  const es = periodEntries(periodKeys());
   renderPerson(buildBuckets(es), es, seriesFor(es));
 }
 
@@ -721,13 +769,13 @@ function renderHistory(es) {
 function renderResults() {
   const keys = periodKeys();
   $("#range-label").textContent = rangeLabel(keys);
-  if (!ready()) {
+  if (!resultsReady()) {
     for (const id of ["#ranking", "#share-card", "#chart-daily", "#chart-trend", "#chart-person", "#chores-chart", "#history"]) $(id).innerHTML = '<p class="loading">Wczytywanie…</p>';
     $("#person-donut").innerHTML = ""; $("#person-pick").innerHTML = ""; $("#person-stats").innerHTML = "";
     $("#week-table").innerHTML = ""; $("#rank-meta").textContent = ""; $("#hist-meta").textContent = "";
     return;
   }
-  const es = entriesIn(keys), series = seriesFor(es), buckets = buildBuckets(es);
+  const es = periodEntries(keys), series = seriesFor(es), buckets = buildBuckets(es);
   renderPeople(es, series);
   renderShare(es, series);
   renderTimeChart(buckets, series);
@@ -773,7 +821,7 @@ document.addEventListener("pointerdown", e => { if (tipOwner && !tipOwner.node.c
 window.addEventListener("scroll", () => { if (!tipEl.hidden) hideTip(); }, { passive: true });
 let resizeT = null;
 window.addEventListener("resize", () => { clearTimeout(resizeT); resizeT = setTimeout(() => {
-  if (famId && tab === "wyniki" && ready()) { hideTip(); const es = entriesIn(periodKeys()), series = seriesFor(es), b = buildBuckets(es); renderTimeChart(b, series); renderTrend(b, series); renderPerson(b, es, series); }
+  if (famId && tab === "wyniki" && resultsReady()) { hideTip(); const es = periodEntries(periodKeys()), series = seriesFor(es), b = buildBuckets(es); renderTimeChart(b, series); renderTrend(b, series); renderPerson(b, es, series); }
 }, 150); });
 
 /* ---------- Ustawienia ---------- */
@@ -971,7 +1019,17 @@ document.addEventListener("click", e => {
   else if (a === "person") { personSel = id; lsSet("dd.person." + famId, id); hideTip(); renderPersonOnly(); }
   else if (a === "note-save") { const t = noteTarget(); if (t) { saveNote(t, $("#note").value); renderNoteBox(); } }
   else if (a === "note-close") { lastLogged = null; $("#note").value = ""; renderNoteBox(); }
-  else if (a === "range") { range = RANGES.includes(b.dataset.range) ? b.dataset.range : "day"; lsSet("dd.range", range); showAllHist = false; hideTip(); renderSegs(); renderResults(); }
+  else if (a === "range") {
+    range = RANGES.includes(b.dataset.range) ? b.dataset.range : "day"; lsSet("dd.range", range);
+    if (range === "month") viewMonth = null;   // „Miesiąc” zawsze zaczyna od bieżącego
+    showAllHist = false; hideTip(); ensureMonth(); renderSegs(); renderResults();
+  }
+  else if (a === "month-prev" || a === "month-next") {
+    if (b.disabled) return;
+    const ym = monthAdd(viewedMonth(), a === "month-prev" ? -1 : 1);
+    viewMonth = ym >= curMonth() ? null : ym;
+    showAllHist = false; hideTip(); ensureMonth(); renderSegs(); renderResults();
+  }
   else if (a === "log") { const c = chores.find(x => x.id === id); if (c) logEntry({ id: c.id, name: c.name, icon: choreIcon(c) }); }
   else if (a === "add-chore") { addingChore = true; newIcon = "check"; newIconManual = false; renderTiles(true); const i = $("#tile-chore"); if (i) i.focus(); }
   else if (a === "cancel-chore") { addingChore = false; renderTiles(true); }
@@ -1268,6 +1326,7 @@ async function restoreLegacy(form) {
     await setDoc(doc(sFs, "meta", "migrated"), { name: famName, slug: slugOf(famName), at: Date.now() }).catch(() => {});
     await signOut(sAuth);
     form.reset();
+    loadFirstMonth();
     toast("Przywrócono " + oEnt.length + " " + wpis(oEnt.length) + ", " + M.fresh.length + " os. i " + C.fresh.length + " " + czynnosc(C.fresh.length) + ".");
   } catch (ex) {
     console.warn("przywracanie:", ex);
@@ -1327,6 +1386,8 @@ function subscribe() {
 function unsubscribeAll() {
   unsubs.forEach(u => u()); unsubs = [];
   if (unsubEntries) { unsubEntries(); unsubEntries = null; }
+  if (unsubMonth) { unsubMonth(); unsubMonth = null; }
+  monthData = { ym: null, list: [], loaded: false }; viewMonth = null; firstMonth = null;
   members = []; chores = []; ENT = []; ghostM = {}; ghostC = {};
   loaded.members = loaded.chores = loaded.entries = false; tilesSig = "";
 }
@@ -1340,7 +1401,7 @@ function startSession(user) {
   editNote = null; editMember = null; iconEdit = null; addingChore = false; showAllHist = false;
   $("#login").hidden = true; $("#app").hidden = false;
   showNotice("");
-  renderHeader(); renderSegs(); renderTabs(); renderFam(); renderAll(); subscribe();
+  renderHeader(); renderSegs(); renderTabs(); renderFam(); renderAll(); subscribe(); loadFirstMonth();
 }
 function endSession() {
   if (!famId) return;
@@ -1353,7 +1414,7 @@ function endSession() {
 let lastHour = new Date().getHours();
 function checkDay() {
   const now = new Date(), k = keyOf(now);
-  if (k !== todayK) { todayK = k; lastHour = now.getHours(); renderHeader(); renderSegs(); if (famId) { subEntries(); renderAll(); } return; }
+  if (k !== todayK) { todayK = k; lastHour = now.getHours(); renderHeader(); renderSegs(); if (famId) { subEntries(); ensureMonth(); renderAll(); } return; }
   // widok dnia: przesuwamy „teraz” na wykresach co pełną godzinę
   if (now.getHours() !== lastHour) { lastHour = now.getHours(); if (famId && range === "day" && tab === "wyniki" && ready()) renderResults(); }
 }
