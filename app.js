@@ -5,10 +5,10 @@ import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signI
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, orderBy as fsOrderBy, limit as fsLimit, getDoc, getDocs, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261101-192029";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261101-192029";
+import { firebaseConfig } from "./firebase-config.js?v=20261105-141326";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261105-141326";
 
-const BUILD = "20261101-192029";
+const BUILD = "20261105-141326";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
@@ -110,7 +110,7 @@ let unsubs = [], unsubEntries = null;
 let selected = null;
 let when = "today";
 let tab = ["zglos", "wyniki"].includes(location.hash.slice(1)) ? location.hash.slice(1) : (lsGet("dd.tab") === "wyniki" ? "wyniki" : "zglos");
-const RANGES = ["day", "7", "month"];
+const RANGES = ["day", "yday", "7", "month"];
 const MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
 // przeglądanie miesięcy: viewMonth = "RRRR-MM" (null = bieżący); dawne miesiące wczytujemy osobnym zapytaniem
 let viewMonth = null, monthData = { ym: null, list: [], loaded: false }, unsubMonth = null, firstMonth = null;
@@ -121,6 +121,13 @@ const monthAdd = (ym, d) => { const [Y, M] = ym.split("-").map(Number), dt = new
 const monthName = ym => { const [Y, M] = ym.split("-").map(Number); return MONTHS[M - 1] + " " + Y; };
 const MONTHS_BACK = 36;   // gdy nie wiadomo, od kiedy są wpisy
 let range = (v => v === "30" ? "month" : RANGES.includes(v) ? v : "day")(lsGet("dd.range"));
+// widok jednego dnia (dziś albo wczoraj): oś godzinowa zamiast dni
+const isDayView = () => range === "day" || range === "yday";
+const dayViewKey = () => range === "yday" ? keyOf(dayAgo(1)) : todayK;
+const dayWord = () => range === "yday" ? "wczoraj" : "dziś";
+// wykres „Dzień po dniu”: słupki albo nałożone linie domowników
+let dailyView = lsGet("dd.dailyView") === "lines" ? "lines" : "bars";
+let hiddenPeople = new Set();                     // osoby ukryte na wykresie liniowym (zapamiętane dla rodziny)
 let todayK = keyOf(new Date());
 let showAllHist = false, addingChore = false, tilesSig = "";
 let newIcon = "check", newIconManual = false;     // wybór ikonki w formularzu „Inna czynność”
@@ -288,14 +295,14 @@ function renderRecent() {
 /* ---------- widok: Wyniki ---------- */
 // okres wyników: dziś, ostatnie 7 dni albo bieżący miesiąc (od 1. dnia do dziś)
 function periodKeys() {
-  if (range === "day") return [todayK];
+  if (isDayView()) return [dayViewKey()];
   if (range === "7") return keysFor(7);
   const ym = viewedMonth(), [Y, M] = ym.split("-").map(Number);
   const days = ym === curMonth() ? Number(todayK.slice(8)) : new Date(Y, M, 0).getDate();   // bieżący: do dziś, dawny: cały
   return Array.from({ length: days }, (_, i) => ym + "-" + pad(i + 1));
 }
 function rangeLabel(keys) {
-  if (range === "day") return "Dziś, " + fmtDM(todayK);
+  if (isDayView()) return (range === "yday" ? "Wczoraj, " : "Dziś, ") + fmtDM(dayViewKey());
   if (range === "month" && !isPastMonth()) return "od " + fmtDM(keys[0]) + " do dziś";
   return fmtDM(keys[0]) + " – " + fmtDM(keys[keys.length - 1]);
 }
@@ -336,17 +343,18 @@ const capFirst = s => s.charAt(0).toUpperCase() + s.slice(1);
 
 // kubełki osi czasu: godziny (widok dnia) albo dni (7 dni, miesiąc)
 function buildBuckets(es) {
-  if (range === "day") {
-    const hourOf = e => new Date(e.t).getHours(), nowH = new Date().getHours();
+  if (isDayView()) {
+    // dziś: oś do bieżącej godziny („teraz”); wczoraj: cały dzień
+    const live = range === "day", hourOf = e => new Date(e.t).getHours(), nowH = live ? new Date().getHours() : -1;
     const hs = es.map(hourOf);
     const minH = Math.min(6, ...hs), maxH = Math.max(22, nowH, ...hs);
     const out = [];
     for (let h = minH; h <= maxH; h++) {
       const list = es.filter(e => hourOf(e) === h);
-      const show = h === nowH || (h % 3 === 0 && Math.abs(h - nowH) >= 2);
-      out.push({ list, total: list.length, by: countBy(list, "m"), future: h > nowH, now: h === nowH,
+      const show = live ? h === nowH || (h % 3 === 0 && Math.abs(h - nowH) >= 2) : h % 3 === 0;
+      out.push({ list, total: list.length, by: countBy(list, "m"), future: live && h > nowH, now: live && h === nowH,
         lines: show ? [h + ":00"] : [], title: h + ":00–" + (h + 1) + ":00",
-        asOf: h === nowH ? "Teraz" : "Do " + (h + 1) + ":00", rowLabel: esc(h + ":00–" + (h + 1) + ":00") });
+        asOf: live && h === nowH ? "Teraz" : "Do " + (h + 1) + ":00", rowLabel: esc(h + ":00–" + (h + 1) + ":00") });
     }
     return out;
   }
@@ -363,14 +371,14 @@ function buildBuckets(es) {
 
 // Kto ile zrobił: pasek, liczba (w widoku dnia także kreski) i lista czynności
 function renderPeople(es, series) {
-  const el = $("#ranking"), day = range === "day";
+  const el = $("#ranking"), day = isDayView();
   $("#rank-meta").textContent = es.length ? "razem " + es.length + " " + czynnosc(es.length) : "";
   if (!series.length) { el.innerHTML = '<p class="loading">Gdy dodasz domowników, zobaczysz tu, kto ile zrobił.</p>'; return; }
   const rows = series.map(m => { const mine = es.filter(e => e.m === m.id); return { m, n: mine.length, mine }; }).sort((a, b) => b.n - a.n || byOrder(a.m, b.m));
   const max = Math.max(1, ...rows.map(r => r.n));
   el.innerHTML = rows.map(r => {
     let chips;
-    if (!r.n) chips = '<span class="muted" style="font-size:14px">' + (day ? "dziś jeszcze nic" : "brak wpisów w tym okresie") + "</span>";
+    if (!r.n) chips = '<span class="muted" style="font-size:14px">' + (day ? (range === "yday" ? "wczoraj nic" : "dziś jeszcze nic") : "brak wpisów w tym okresie") + "</span>";
     else if (day) chips = r.mine.slice().sort((a, b) => a.t - b.t).map(e => '<span class="done">' + esc(entryName(e)) + "<time>" + hhmm(e.t) + "</time></span>").join("");
     else {
       const by = {}; for (const e of r.mine) { const k = entryName(e); by[k] = (by[k] || 0) + 1; }
@@ -451,10 +459,23 @@ function axisLabels(buckets, xAt, H, padB, anchorAt) {
   return s;
 }
 
-// słupki: dzień po dniu albo godzina po godzinie
+// „Dzień po dniu”: słupki (domownicy jeden na drugim) albo linie (każdy domownik osobno, nałożone)
 function renderTimeChart(buckets, series) {
+  $("#daily-h").textContent = isDayView() ? "Godzina po godzinie" : "Dzień po dniu";
+  document.querySelectorAll('[data-action="daily-view"]').forEach(b => b.setAttribute("aria-checked", String(b.dataset.view === dailyView)));
+  $("#daily-sub").textContent = dailyView === "lines"
+    ? "Każda linia to jeden domownik. Dotknij imienia w legendzie, żeby je ukryć albo pokazać."
+    : "Słupek to wszystkie czynności " + (isDayView() ? "w danej godzinie" : "danego dnia") + ", kolory to domownicy.";
+  if (dailyView === "lines") return renderDailyLines(buckets, series);
+  renderDailyBars(buckets, series);
+}
+function renderDailyOnly() {
+  if (!famId || !resultsReady()) return;
+  const es = periodEntries(periodKeys());
+  renderTimeChart(buildBuckets(es), seriesFor(es));
+}
+function renderDailyBars(buckets, series) {
   const box = $("#chart-daily");
-  $("#daily-h").textContent = range === "day" ? "Godzina po godzinie" : "Dzień po dniu";
   $("#daily-legend").innerHTML = legendHtml(series);
   if ($("#tab-wyniki").hidden) return;
   const two = buckets.some(b => b.lines.length > 1);
@@ -466,7 +487,7 @@ function renderTimeChart(buckets, series) {
   const y = v => padT + plotH - (v / top) * plotH;
   const band = plotW / n, bw = Math.min(24, Math.max(4, band * 0.62)), capAll = band >= 14;
   const maxIdx = buckets.reduce((bi, p, i) => p.total > buckets[bi].total ? i : bi, 0);
-  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Liczba czynności ' + (range === "day" ? "godzina po godzinie" : "dzień po dniu") + '">';
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="Liczba czynności ' + (isDayView() ? "godzina po godzinie" : "dzień po dniu") + '">';
   for (let v = step; v <= top; v += step) s += '<line class="gl" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(v) + '" y2="' + y(v) + '"/>';
   for (let v = 0; v <= top; v += step) s += '<text class="ax" x="' + (padL - 6) + '" y="' + (y(v) + 4) + '" text-anchor="end">' + v + "</text>";
   buckets.forEach((p, i) => {
@@ -538,11 +559,48 @@ function gridHtml(W, padL, padR, top, step, y) {
   return s;
 }
 
+// linie nałożone: ile czynności każdy domownik zrobił danego dnia (w widoku dnia: w danej godzinie)
+function renderDailyLines(buckets, series) {
+  const box = $("#chart-daily");
+  $("#daily-legend").innerHTML = series.map(m => '<button type="button" class="lg lg-btn" data-action="toggle-person" data-id="' + esc(m.id) + '" aria-pressed="' + !hiddenPeople.has(m.id) + '"><i style="' + cvar(m.slot) + '"></i>' + esc(m.name) + "</button>").join("");
+  if ($("#tab-wyniki").hidden) return;
+  if (!series.length) { box.innerHTML = '<p class="chart-sub">Gdy dodasz domowników, zobaczysz tu ich linie.</p>'; return; }
+  let vis = series.filter(m => !hiddenPeople.has(m.id));
+  if (!vis.length) vis = series;
+  const n = buckets.length, last = buckets.reduce((li, b, i) => b.future ? li : i, 0);
+  const vals = vis.map(m => buckets.map((b, i) => i > last ? null : (b.by[m.id] || 0)));
+  const { top, step } = niceScale(Math.max(1, ...vals.flatMap(v => v.slice(0, last + 1))));
+  const two = buckets.some(b => b.lines.length > 1);
+  const W = Math.max(260, box.clientWidth || 320), H = two ? 224 : 210;
+  const padL = 26, padR = 12, padT = 16, padB = two ? 34 : 20;
+  const plotW = W - padL - padR, plotH = H - padT - padB;
+  const few = n <= 10, inset = few ? plotW / n / 2 : 0;
+  const x = i => n === 1 ? padL + plotW / 2 : padL + inset + (plotW - 2 * inset) * i / (n - 1);
+  const y = v => padT + plotH - (v / top) * plotH;
+  const yl = (v, si) => y(v) + (si - (vis.length - 1) / 2) * 2.5;   // równe wartości: linie obok siebie zamiast jedna na drugiej
+  let s = '<svg viewBox="0 0 ' + W + " " + H + '" width="' + W + '" height="' + H + '" role="img" aria-label="' + esc("Wykres liniowy: ile czynności " + (isDayView() ? "w każdej godzinie" : "dziennie") + " – " + vis.map(m => m.name).join(", ")) + '">';
+  s += gridHtml(W, padL, padR, top, step, y);
+  s += '<line class="base" x1="' + padL + '" x2="' + (W - padR) + '" y1="' + y(0) + '" y2="' + y(0) + '"/>';
+  s += axisLabels(buckets, x, H, padB, few ? null : edgeAnchor(n));
+  vis.forEach((m, si) => {
+    const pts = vals[si].slice(0, last + 1).map((v, i) => x(i).toFixed(1) + "," + yl(v, si).toFixed(1));
+    if (pts.length > 1) s += '<path class="tr-line" style="stroke:var(--s' + m.slot + ')" d="M' + pts.join("L") + '"/>';
+    vals[si].slice(0, last + 1).forEach((v, i) => {
+      if (few || i === last) s += '<circle class="tr-dot" r="' + (few ? 4 : 4.5) + '" cx="' + x(i).toFixed(1) + '" cy="' + yl(v, si).toFixed(1) + '" style="fill:var(--s' + m.slot + ')"/>';
+    });
+  });
+  s += crossHtml(padT, plotH, padL, plotW, "Wykres liniowy: użyj strzałek, żeby zobaczyć kolejne " + (isDayView() ? "godziny" : "dni")) + "</svg>";
+  box.innerHTML = s;
+  bindCrosshair(box.querySelector("svg"), { W, padL: padL + inset, plotW: plotW - 2 * inset, padT, plotH, n, last, x,
+    dots: i => vis.map((m, si) => '<circle class="tr-dot" r="5" cx="' + x(i) + '" cy="' + yl(vals[si][i], si) + '" style="fill:var(--s' + m.slot + ')"/>').join(""),
+    tip: i => ({ title: buckets[i].title + " · razem " + buckets[i].total, rows: vis.map((m, si) => ({ slot: m.slot, label: m.name, value: String(vals[si][i]) })) }) });
+}
+
 // wykres liniowy: suma czynności narastająco, osobna linia dla każdej osoby
 function renderTrend(buckets, series) {
   const box = $("#chart-trend");
   $("#trend-legend").innerHTML = legendHtml(series);
-  $("#trend-sub").textContent = "Ile czynności każda osoba miała na koncie w kolejnych " + (range === "day" ? "godzinach dnia" : "dniach") + ". Przesuń palcem po wykresie, żeby zobaczyć liczby.";
+  $("#trend-sub").textContent = "Ile czynności każda osoba miała na koncie w kolejnych " + (isDayView() ? "godzinach dnia" : "dniach") + ". Przesuń palcem po wykresie, żeby zobaczyć liczby.";
   if ($("#tab-wyniki").hidden) return;
   const total = buckets.reduce((a, b) => a + b.total, 0);
   if (!series.length || !total) { box.innerHTML = '<p class="chart-sub">Brak wpisów w tym okresie.</p>'; return; }
@@ -590,13 +648,13 @@ function renderPerson(buckets, es, series) {
     return;
   }
   if (!series.some(m => m.id === personSel)) personSel = (series.find(m => m.id === selected) || series[0]).id;
-  const p = memberOf(personSel), mine = es.filter(e => e.m === p.id), day = range === "day";
+  const p = memberOf(personSel), mine = es.filter(e => e.m === p.id), day = isDayView();
   pick.innerHTML = series.map(m => '<button type="button" class="chip' + (m.id === p.id ? " on" : "") + '" role="radio" aria-checked="' + (m.id === p.id) + '" data-action="person" data-id="' + esc(m.id) + '" style="' + cvar(m.slot) + '">' + avatar(m) + "<span>" + esc(m.name) + "</span></button>").join("");
   $("#person-meta").textContent = mine.length + " " + czynnosc(mine.length);
   const st = [];
   if (day) {
     const ts = mine.map(e => e.t).sort((a, b) => a - b);
-    st.push(["Razem dziś", String(mine.length)]);
+    st.push(["Razem " + dayWord(), String(mine.length)]);
     if (ts.length) st.push(["Pierwsza", hhmm(ts[0])]);
     if (ts.length > 1) st.push(["Ostatnia", hhmm(ts[ts.length - 1])]);
   } else {
@@ -617,7 +675,7 @@ function renderPersonOnly() {
 
 // wykres liniowy: ile czynności wybrana osoba zrobiła każdego dnia (w widoku dnia: w każdej godzinie)
 function renderPersonLine(buckets, p) {
-  const box = $("#chart-person"), day = range === "day";
+  const box = $("#chart-person"), day = isDayView();
   $("#pline-h").textContent = day ? "Ile czynności w każdej godzinie" : "Ile czynności dziennie";
   $("#pline-sub").textContent = "Przesuń palcem po wykresie, żeby zobaczyć czynności z danego " + (day ? "przedziału godzin." : "dnia.");
   if ($("#tab-wyniki").hidden) return;
@@ -664,16 +722,16 @@ function renderPersonLine(buckets, p) {
 
 // diagram kołowy: na ile dni przypadło 0, 1, 2, 3+ czynności (w widoku dnia: pora dnia)
 function renderPersonDonut(buckets, p, mine) {
-  const box = $("#person-donut"), day = range === "day";
+  const box = $("#person-donut"), day = isDayView();
   $("#pdonut-h").textContent = day ? "O jakiej porze dnia" : "Ile czynności dziennie";
-  $("#pdonut-sub").textContent = day ? "Dzisiejsze czynności według pory dnia." : "Na ile dni przypadło 0, 1, 2 albo 3 i więcej czynności.";
+  $("#pdonut-sub").textContent = day ? (range === "yday" ? "Wczorajsze" : "Dzisiejsze") + " czynności według pory dnia." : "Na ile dni przypadło 0, 1, 2 albo 3 i więcej czynności.";
   let parts, cv, cl, unit;
   if (day) {
-    if (!mine.length) { box.innerHTML = '<p class="chart-sub">Dziś jeszcze nic.</p>'; return; }
+    if (!mine.length) { box.innerHTML = '<p class="chart-sub">' + (range === "yday" ? "Wczoraj nic." : "Dziś jeszcze nic.") + "</p>"; return; }
     const cnt = [0, 0, 0, 0]; mine.forEach(e => cnt[partOf(new Date(e.t).getHours())]++);
     const ks = [1, 0.75, 0.52, 0.32];
     parts = DAY_PARTS.map(([nm, a, b], i) => ({ label: nm + " (" + a + "–" + b + ")", n: cnt[i], color: shade(p.slot, ks[i]) }));
-    cv = String(mine.length); cl = czynnosc(mine.length) + " dziś"; unit = n => String(n);
+    cv = String(mine.length); cl = czynnosc(mine.length) + " " + dayWord(); unit = n => String(n);
   } else {
     const per = buckets.map(b => b.by[p.id] || 0), cnt = [0, 0, 0, 0];
     per.forEach(v => cnt[Math.min(3, v)]++);
@@ -729,7 +787,7 @@ function renderTable(buckets, es, series) {
   const tbl = $("#week-table");
   if (!series.length) { tbl.innerHTML = ""; return; }
   // widok dnia: tylko godziny, w których coś zrobiono; 7 dni i miesiąc: każdy dzień
-  const tRows = buckets.filter(b => range !== "day" || b.total > 0).reverse();
+  const tRows = buckets.filter(b => !isDayView() || b.total > 0).reverse();
   const groups = {};
   for (const e of es) { const key = e.once ? ONCE : e.c; (groups[key] ||= { key, name: e.once ? "Jednorazowe" : entryName(e), icon: e.once ? "check" : entryIcon(e), list: [] }).list.push(e); }
   for (const c of chores) if (!groups[c.id]) groups[c.id] = { key: c.id, name: c.name, icon: choreIcon(c), list: [] };
@@ -739,7 +797,7 @@ function renderTable(buckets, es, series) {
   const chMax = Math.max(1, ...cRows.flatMap(r => series.map(m => byCh[r.key][m.id] || 0)));
   const span = series.length + 2, zero = '<span class="zero">·</span>';
   let h = '<thead><tr><th scope="col"></th>' + series.map(m => '<th scope="col" class="mh">' + avatar(m, "sm") + '<span class="mhn">' + esc(m.name) + "</span></th>").join("") + '<th scope="col" class="tot">Razem</th></tr></thead>';
-  h += '<tbody><tr class="grp"><th colspan="' + span + '" scope="colgroup">' + (range === "day" ? "Godzina po godzinie" : "Dzień po dniu") + "</th></tr>";
+  h += '<tbody><tr class="grp"><th colspan="' + span + '" scope="colgroup">' + (isDayView() ? "Godzina po godzinie" : "Dzień po dniu") + "</th></tr>";
   for (const b of tRows) h += "<tr" + (b.now ? ' class="is-today"' : "") + '><th scope="row">' + b.rowLabel + "</th>" + series.map(m => cell(b.by[m.id] || 0, m.slot, tMax)).join("") + '<td class="tot">' + (b.total || zero) + "</td></tr>";
   h += '<tr class="sum"><th scope="row">Razem</th>' + series.map(m => "<td>" + es.filter(e => e.m === m.id).length + "</td>").join("") + '<td class="tot">' + es.length + "</td></tr></tbody>";
   if (cRows.length) {
@@ -1016,6 +1074,16 @@ document.addEventListener("click", e => {
   if (a === "pick") { selected = id; lsSet("dd.member." + famId, selected); renderWho(); renderTiles(); }
   else if (a === "tab") { setTab(b.dataset.tab); }
   else if (a === "when") { when = b.dataset.when; renderSegs(); }
+  else if (a === "daily-view") { dailyView = b.dataset.view === "lines" ? "lines" : "bars"; lsSet("dd.dailyView", dailyView); hideTip(); renderDailyOnly(); }
+  else if (a === "toggle-person") {
+    if (hiddenPeople.has(id)) hiddenPeople.delete(id);
+    else {
+      const visible = seriesFor(periodEntries(periodKeys())).filter(m => !hiddenPeople.has(m.id));
+      if (visible.length <= 1) { toast("Na wykresie musi zostać co najmniej jedna osoba."); return; }
+      hiddenPeople.add(id);
+    }
+    lsSet("dd.hide." + famId, JSON.stringify([...hiddenPeople])); hideTip(); renderDailyOnly();
+  }
   else if (a === "person") { personSel = id; lsSet("dd.person." + famId, id); hideTip(); renderPersonOnly(); }
   else if (a === "note-save") { const t = noteTarget(); if (t) { saveNote(t, $("#note").value); renderNoteBox(); } }
   else if (a === "note-close") { lastLogged = null; $("#note").value = ""; renderNoteBox(); }
@@ -1397,6 +1465,7 @@ function startSession(user) {
   endSession();
   famId = user.uid; famName = ""; loginNote = "";
   selected = lsGet("dd.member." + famId); personSel = lsGet("dd.person." + famId);
+  try { hiddenPeople = new Set(JSON.parse(lsGet("dd.hide." + famId) || "[]")); } catch (e) { hiddenPeople = new Set(); }
   lastLogged = null; noteMode = "next"; $("#note").value = "";
   editNote = null; editMember = null; iconEdit = null; addingChore = false; showAllHist = false;
   $("#login").hidden = true; $("#app").hidden = false;

@@ -3,7 +3,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <title>Domowe Dyżury</title>
-<link rel="manifest" href="manifest.json?v=20261101-192029">
+<link rel="manifest" href="manifest.json?v=20261105-141326">
 <meta name="theme-color" content="#1D6A56">
 <link rel="icon" href="favicon.ico" sizes="any"><link rel="icon" type="image/png" sizes="32x32" href="icons/icon-32.png">
 <link rel="apple-touch-icon" href="icons/icon-180.png"><meta name="apple-mobile-web-app-title" content="Dyżury">
@@ -200,6 +200,12 @@ input.pin::placeholder{ letter-spacing:.3em }
 @media (min-width:900px){ .res{ grid-template-columns:minmax(0,1fr) minmax(0,1fr); column-gap:48px } .res > .wide{ grid-column:1 / -1 } }
 .filters{ display:flex; align-items:center; gap:14px; flex-wrap:wrap; padding:12px 14px; background:var(--surface); border:1px solid var(--line); border-radius:var(--r) }
 .filters .lbl2{ font-weight:700 }
+.seg.seg-sm button{ padding:5px 12px; font-size:13px }
+.sec-head .seg{ align-self:center }
+@media (max-width:420px){ .filters .seg button{ padding:6px 10px } }
+.lg-btn{ display:inline-flex; align-items:center; gap:6px; border:1px solid var(--line); background:var(--surface); color:var(--ink); border-radius:999px; padding:4px 11px 4px 9px; font-size:14px; cursor:pointer }
+.lg-btn[aria-pressed="false"]{ color:var(--muted); background:transparent; border-style:dashed; text-decoration:line-through }
+.lg-btn[aria-pressed="false"] i{ background:transparent; box-shadow:inset 0 0 0 2px var(--c) }
 .month-nav{ display:inline-flex; align-items:center; gap:4px }
 .mnav{ display:grid; place-items:center; width:38px; height:38px; border-radius:10px; border:1px solid var(--line); background:var(--surface); color:var(--ink); cursor:pointer; padding:0 }
 .mnav svg{ width:20px; height:20px }
@@ -239,6 +245,7 @@ input.pin::placeholder{ letter-spacing:.3em }
 .legend{ display:flex; flex-wrap:wrap; gap:6px 16px; font-size:14px }
 .lg{ display:inline-flex; align-items:center; gap:6px }
 .lg i{ width:12px; height:12px; border-radius:3px; background:var(--c); display:inline-block }
+.legend:has(.lg-btn){ gap:8px }
 #chart-daily, #chart-trend{ position:relative; min-height:224px }
 #chart-person{ position:relative; min-height:200px }
 #chart-person svg{ display:block; width:100%; height:auto; overflow:visible; touch-action:pan-y }
@@ -487,6 +494,7 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
         <span class="lbl2">Okres</span>
         <div class="seg" role="radiogroup" aria-label="Okres wyników">
           <button type="button" role="radio" aria-checked="true" data-action="range" data-range="day">Dziś</button>
+          <button type="button" role="radio" aria-checked="false" data-action="range" data-range="yday">Wczoraj</button>
           <button type="button" role="radio" aria-checked="false" data-action="range" data-range="7">7 dni</button>
           <button type="button" role="radio" aria-checked="false" data-action="range" data-range="month" id="range-month">Miesiąc</button>
         </div>
@@ -511,8 +519,14 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
       </section>
 
       <section class="wide" aria-labelledby="daily-h">
-        <div class="sec-head"><h2 id="daily-h">Dzień po dniu</h2><span class="sec-meta">liczba czynności</span></div>
+        <div class="sec-head"><h2 id="daily-h">Dzień po dniu</h2>
+          <div class="seg seg-sm" role="radiogroup" aria-label="Rodzaj wykresu">
+            <button type="button" role="radio" aria-checked="true" data-action="daily-view" data-view="bars">Słupki</button>
+            <button type="button" role="radio" aria-checked="false" data-action="daily-view" data-view="lines">Linie</button>
+          </div>
+        </div>
         <div class="chart-card">
+          <p class="chart-sub" id="daily-sub"></p>
           <div id="daily-legend" class="legend"></div>
           <div id="chart-daily"></div>
         </div>
@@ -637,5 +651,5 @@ td.tot, th.tot{ font-weight:700; border-left:1px solid var(--line-2) }
 <div id="tip" class="tip" role="tooltip" hidden></div>
 <div id="toast" class="toast" hidden></div>
 
-<script type="module" src="app.js?v=20261101-192029"></script>
+<script type="module" src="app.js?v=20261105-141326"></script>
 </body></html>
