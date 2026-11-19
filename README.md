@@ -6,6 +6,7 @@ Rodzinna tablica obowiązków: domownicy odhaczają wykonane czynności (np. roz
 - Dane i logowanie: Firebase (Firestore + logowanie e-mail/hasło)
 - Wiele rodzin: każda loguje się nazwą rodziny i 4-cyfrowym PIN-em (konto `r.<nazwa>@<projekt>.firebaseapp.com`, hasło `dyzury-<PIN>`), dane w `families/{uid}/…`
 - Poprzednia wersja (jedno konto `rodzina@…` z hasłem): przy pierwszym wejściu dane przenoszą się do nowej rodziny, w starej bazie zostaje znacznik `meta/migrated`
+- Szybkość: zmiany z tego telefonu widać od razu (baza potwierdza je w tle, przy błędzie znikają z komunikatem); Firestore bez IndexedDB (`memoryLocalCache`); szybki start z kopii w localStorage (`dd.cache.<uid>`, czyszczona przy wylogowaniu); ponowne łączenie po powrocie aplikacji z tła
 - Ikonki czynności: `icons.js` (dobierane po nazwie albo wybrane ręcznie)
 - Reguły bazy: `firestore.rules` (wklejone w konsoli Firebase → Firestore → Rules)
 - Przed każdym wgraniem: `python3 tools/bump.py` (nowy numer wersji, telefony pokażą pasek „Jest nowa wersja”)

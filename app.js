@@ -2,18 +2,20 @@ import { initializeApp, deleteApp } from "https://www.gstatic.com/firebasejs/10.
 import { getAuth, initializeAuth, inMemoryPersistence, onAuthStateChanged, signInWithEmailAndPassword, createUserWithEmailAndPassword,
   signOut, updatePassword, reauthenticateWithCredential, EmailAuthProvider }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager,
+import { initializeFirestore, getFirestore, memoryLocalCache, disableNetwork, enableNetwork,
   collection, doc, onSnapshot, setDoc, updateDoc, deleteDoc, query, where, orderBy as fsOrderBy, limit as fsLimit, getDoc, getDocs, getDocFromServer, getDocsFromServer, writeBatch }
   from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
-import { firebaseConfig } from "./firebase-config.js?v=20261105-141326";
-import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261105-141326";
+import { firebaseConfig } from "./firebase-config.js?v=20261119-222744";
+import { ICON_LIST, guessIcon, iconKey, iconSvg } from "./icons.js?v=20261119-222744";
 
-const BUILD = "20261105-141326";
+const BUILD = "20261119-222744";
 
 const fbApp = initializeApp(firebaseConfig);
 const auth = getAuth(fbApp);
 let fs;
-try { fs = initializeFirestore(fbApp, { localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() }) }); }
+// Bez zapisu w pamięci przeglądarki (IndexedDB): na iPhonie potrafi opóźniać zapisy o sekundy.
+// Szybki start zapewnia własna kopia danych w localStorage (niżej: „szybki start”).
+try { fs = initializeFirestore(fbApp, { localCache: memoryLocalCache() }); }
 catch (e) { fs = getFirestore(fbApp); }
 
 // ---------- nowa wersja na serwerze (telefony długo trzymają stare pliki)
@@ -113,7 +115,7 @@ let tab = ["zglos", "wyniki"].includes(location.hash.slice(1)) ? location.hash.s
 const RANGES = ["day", "yday", "7", "month"];
 const MONTHS = ["Styczeń","Luty","Marzec","Kwiecień","Maj","Czerwiec","Lipiec","Sierpień","Wrzesień","Październik","Listopad","Grudzień"];
 // przeglądanie miesięcy: viewMonth = "RRRR-MM" (null = bieżący); dawne miesiące wczytujemy osobnym zapytaniem
-let viewMonth = null, monthData = { ym: null, list: [], loaded: false }, unsubMonth = null, firstMonth = null;
+let viewMonth = null, monthData = { ym: null, base: [], list: [], loaded: false }, unsubMonth = null, firstMonth = null;
 const curMonth = () => todayK.slice(0, 7);
 const viewedMonth = () => viewMonth && viewMonth < curMonth() ? viewMonth : curMonth();
 const isPastMonth = () => range === "month" && viewedMonth() < curMonth();
@@ -201,7 +203,7 @@ function renderHeader() {
 }
 function renderFam() {
   $("#restore-sec").hidden = famHasOld;
-  $("#fam-label").textContent = famName ? "Rodzina: " + famName : "";
+  $("#fam-label").textContent = (famName ? "Rodzina: " + famName : "") + (famId && !isLive() ? (famName ? " · " : "") + "aktualizuję…" : "");
   $("#fam-info").textContent = famName
     ? "Domownicy logują się nazwą „" + famName + "” i Waszym 4-cyfrowym PIN-em."
     : "Domownicy logują się nazwą rodziny i Waszym 4-cyfrowym PIN-em.";
@@ -314,16 +316,16 @@ function ensureMonth() {
   const ym = famId && isPastMonth() ? viewedMonth() : null;
   if (!ym) {
     if (unsubMonth) { unsubMonth(); unsubMonth = null; }
-    if (monthData.ym) { monthData = { ym: null, list: [], loaded: false }; rebuildGhosts(); }
+    if (monthData.ym) { monthData = { ym: null, base: [], list: [], loaded: false }; rebuildGhosts(); }
     return;
   }
   if (monthData.ym === ym) return;
   if (unsubMonth) unsubMonth();
-  monthData = { ym, list: [], loaded: false };
+  monthData = { ym, base: [], list: [], loaded: false };
   unsubMonth = onSnapshot(query(fcol("entries"), where("day", ">=", ym + "-01"), where("day", "<=", ym + "-31")), s => {
     if (monthData.ym !== ym) return;
-    monthData.list = s.docs.map(parseEntry).filter(Boolean).sort((a, b) => b.t - a.t);
-    monthData.loaded = true; rebuildGhosts(); renderResults();
+    monthData.base = s.docs.map(parseEntry).filter(Boolean);
+    monthData.loaded = true; mergeEntries(); renderResults();
   }, subErr);
 }
 // najstarszy miesiąc z wpisami (granica strzałki „wstecz”)
@@ -915,7 +917,7 @@ function renderManage() {
 }
 
 function renderAll() {
-  renderWho(); renderTiles(); renderNoteBox(); renderRecent(); renderResults(); renderManage();
+  renderWho(); renderTiles(); renderNoteBox(); renderRecent(); renderResults(); renderManage(); renderFam();
 }
 
 /* ---------- komunikaty ---------- */
@@ -955,14 +957,13 @@ function logEntry(chore) {
     const btn = document.querySelector('#tiles .tile[data-id="' + CSS.escape(chore.id) + '"]');
     if (btn) { btn.classList.remove("flash"); void btn.offsetWidth; btn.classList.add("flash"); }
   }
-  const ref = fdoc("entries", id);
   lastLogged = { id, name: chore.name, icon: data.ci, who: m.name, t: d.getTime(), at: Date.now(), d: note };
   inp.value = note; renderNoteBox();
   toast(m.name + ": " + chore.name + (chore.once ? " (jednorazowa)" : "") + (when === "yesterday" ? " (wczoraj)" : ""), [
     { label: "Opis", fn: () => { if (lastLogged && lastLogged.id === id) { const n = $("#note"); n.scrollIntoView({ block: "center", behavior: "smooth" }); n.focus({ preventScroll: true }); } } },
-    { label: "Cofnij", fn: () => { forgetNoteTarget(id); deleteDoc(ref).then(() => toast("Cofnięto wpis.")).catch(handleErr); } }
+    { label: "Cofnij", fn: () => removeEntryNow(id, "Cofnięto wpis.") }
   ]);
-  setDoc(ref, data).catch(handleErr);
+  addEntryNow(id, data);
   return true;
 }
 
@@ -970,7 +971,7 @@ function logEntry(chore) {
 function noteTarget() {
   const t = lastLogged;
   if (!t) return null;
-  const gone = loaded.entries && Date.now() - t.at > 4000 && !ENT.some(e => e.id === t.id);   // cofnięta albo usunięta
+  const gone = live.entries && !pend.add.has(t.id) && Date.now() - t.at > 4000 && !ENT.some(e => e.id === t.id);   // cofnięta albo usunięta
   if (gone || Date.now() - t.at > 30 * 60000) { lastLogged = null; return null; }
   return t;
 }
@@ -980,7 +981,7 @@ function forgetNoteTarget(id) {
 function saveNote(target, text, quiet) {
   const d = cleanNote(text);
   target.d = d;
-  updateDoc(fdoc("entries", target.id), { d }).then(() => { if (!quiet) toast(d ? "Zapisano opis." : "Usunięto opis."); }).catch(handleErr);
+  setNoteNow(target.id, d, quiet);
 }
 function renderNoteBox() {
   const inp = $("#note"); if (!inp) return;
@@ -1064,7 +1065,7 @@ function setTab(t) {
   if (t === "wyniki") renderResults();
   window.scrollTo({ top: 0 });
 }
-function logout() { closeManage(); signOut(auth); }
+function logout() { closeManage(); if (famId) lsSet(cacheKey(), null); signOut(auth); }
 
 /* ---------- zdarzenia ---------- */
 document.addEventListener("click", e => {
@@ -1110,7 +1111,7 @@ document.addEventListener("click", e => {
   else if (a === "open-manage") { openManage(); }
   else if (a === "close-manage") { closeManage(); }
   else if (a === "toast-act") { const f = toastAction && toastAction[Number(b.dataset.i) || 0]; toastAction = null; $("#toast").hidden = true; if (f) f(); }
-  else if (a === "del") { confirmThen(b, "Na pewno?", () => { forgetNoteTarget(id); deleteDoc(fdoc("entries", id)).then(() => toast("Usunięto wpis.")).catch(handleErr); }); }
+  else if (a === "del") { confirmThen(b, "Na pewno?", () => removeEntryNow(id, "Usunięto wpis.")); }
   else if (a === "note") { editNote = id; renderRecent(); renderResults(); const f = $("#tab-" + tab).querySelector('form[data-form="note"][data-id="' + CSS.escape(id) + '"] input'); if (f) f.focus(); }
   else if (a === "note-cancel") { editNote = null; if (document.activeElement) document.activeElement.blur(); renderRecent(); renderResults(); }
   else if (a === "more-hist") { showAllHist = !showAllHist; renderResults(); }
@@ -1165,8 +1166,7 @@ document.addEventListener("submit", async e => {
     const id = f.dataset.id, d = cleanNote(val);
     if (input) input.blur();
     editNote = null;
-    updateDoc(fdoc("entries", id), { d }).then(() => toast(d ? "Zapisano opis." : "Usunięto opis.")).catch(handleErr);
-    renderRecent(); renderResults();
+    setNoteNow(id, d);
   } else if (kind === "restore") {
     restoreLegacy(f);
   } else if (kind === "pin") {
@@ -1423,6 +1423,87 @@ async function changePin(form) {
   }
 }
 
+/* ---------- zmiany z tego telefonu widoczne od razu ---------- */
+// Zgłoszenie, usunięcie i opis pokazujemy natychmiast; baza potwierdza je w tle.
+// Gdyby zapis się nie udał, zmiana znika z ekranu i pojawia się komunikat.
+const pend = { add: new Map(), del: new Set(), note: new Map() };
+let baseENT = [];
+function withPending(list, fits) {
+  const fix = e => pend.note.has(e.id) ? Object.assign({}, e, { d: pend.note.get(e.id) }) : e;
+  const out = list.filter(e => !pend.del.has(e.id)).map(fix), have = new Set(out.map(e => e.id));
+  for (const [id, e] of pend.add) if (!have.has(id) && !pend.del.has(id) && fits(e)) out.push(fix(e));
+  return out.sort((a, b) => b.t - a.t);
+}
+function mergeEntries() {
+  const from = windowStart();
+  ENT = withPending(baseENT, e => e.day >= from);
+  if (monthData.ym) monthData.list = withPending(monthData.base, e => e.day.slice(0, 7) === monthData.ym);
+  rebuildGhosts();
+}
+function settle(kind, id) {
+  if (kind === "add") pend.add.delete(id); else if (kind === "del") pend.del.delete(id); else pend.note.delete(id);
+  mergeEntries();
+}
+function failed(kind, id, e) { settle(kind, id); renderAll(); handleErr(e); }
+function addEntryNow(id, data) {
+  pend.add.set(id, parseEntry({ id, data: () => data }));
+  mergeEntries(); renderAll();
+  setDoc(fdoc("entries", id), data).then(() => settle("add", id), e => failed("add", id, e));
+}
+function removeEntryNow(id, msg) {
+  forgetNoteTarget(id);
+  pend.del.add(id); mergeEntries(); renderAll();
+  if (msg) toast(msg);
+  deleteDoc(fdoc("entries", id)).then(() => settle("del", id), e => failed("del", id, e));
+}
+function setNoteNow(id, d, quiet) {
+  pend.note.set(id, d); mergeEntries(); renderAll();
+  if (!quiet) toast(d ? "Zapisano opis." : "Usunięto opis.");
+  updateDoc(fdoc("entries", id), { d }).then(() => settle("note", id), e => failed("note", id, e));
+}
+
+/* ---------- szybki start: ostatnie dane rodziny zapamiętane na telefonie ---------- */
+// Przy otwarciu aplikacja od razu pokazuje to, co widziała ostatnio, a dane z bazy podmieniają je po chwili.
+const live = { members: false, chores: false, entries: false };
+const cacheKey = () => "dd.cache." + famId;
+let cacheT = null;
+function scheduleCache() { clearTimeout(cacheT); cacheT = setTimeout(saveCache, 800); }
+function saveCache() {
+  clearTimeout(cacheT);
+  if (!famId || !live.members || !live.chores || !live.entries) return;
+  lsSet(cacheKey(), JSON.stringify({ v: 1, at: Date.now(), name: famName, members, chores, entries: baseENT }));
+}
+function loadCache() {
+  let c = null;
+  try { c = JSON.parse(lsGet(cacheKey()) || "null"); } catch (e) { return false; }
+  if (!c || c.v !== 1 || !Array.isArray(c.members) || !Array.isArray(c.chores) || !Array.isArray(c.entries)) return false;
+  if (!(Date.now() - c.at < 21 * 864e5)) return false;   // starsze niż 3 tygodnie: nie pokazujemy
+  const str = v => typeof v === "string";
+  const from = windowStart();
+  members = c.members.filter(m => m && str(m.id) && str(m.name) && validSlot(m.slot) && Number.isFinite(m.order))
+    .map(m => ({ id: m.id, name: clean(m.name, 30), slot: m.slot, order: m.order }));
+  chores = c.chores.filter(x => x && str(x.id) && str(x.name) && Number.isFinite(x.order))
+    .map(x => ({ id: x.id, name: clean(x.name, 80), icon: str(x.icon) ? x.icon : null, order: x.order }));
+  baseENT = c.entries.filter(e => e && str(e.id) && str(e.m) && str(e.c) && str(e.day) && Number.isFinite(e.t) && validSlot(e.ms) && e.day >= from)
+    .map(e => ({ id: e.id, m: e.m, c: e.c, day: e.day, t: e.t, mn: clean(e.mn, 30), ms: e.ms, cn: clean(e.cn, 80),
+      ci: str(e.ci) ? e.ci : null, once: e.once === true, d: cleanNote(e.d) }));
+  if (str(c.name) && !famName) famName = clean(c.name, 30);
+  loaded.members = loaded.chores = loaded.entries = true;
+  mergeEntries();
+  return true;
+}
+const isLive = () => live.members && live.chores && live.entries;
+
+// Po powrocie do aplikacji (telefon uśpił ją w tle) od razu łączymy się z bazą na nowo,
+// zamiast czekać, aż stare połączenie samo się zorientuje, że zerwane.
+let hiddenAt = 0, reconnecting = false;
+async function refreshConnection() {
+  if (reconnecting || !famId) return;
+  reconnecting = true;
+  try { await disableNetwork(fs); await enableNetwork(fs); } catch (e) { console.warn("ponowne łączenie:", e); }
+  finally { reconnecting = false; }
+}
+
 /* ---------- dane na żywo ---------- */
 // pierwszy potrzebny dzień: początek bieżącego miesiąca albo 6 dni wstecz (co wcześniejsze)
 function windowStart() { const m = new Date(); m.setDate(1); const a = keyOf(m), b = keyOf(dayAgo(6)); return a < b ? a : b; }
@@ -1435,8 +1516,8 @@ function subErr(e) {
 function subEntries() {
   if (unsubEntries) unsubEntries();
   unsubEntries = onSnapshot(query(fcol("entries"), where("day", ">=", windowStart())), s => {
-    ENT = s.docs.map(parseEntry).filter(Boolean).sort((a, b) => b.t - a.t);
-    rebuildGhosts(); loaded.entries = true; renderAll();
+    baseENT = s.docs.map(parseEntry).filter(Boolean);
+    loaded.entries = true; live.entries = true; mergeEntries(); renderAll(); scheduleCache();
   }, subErr);
 }
 function subscribe() {
@@ -1445,19 +1526,21 @@ function subscribe() {
     famName = x && typeof x.name === "string" ? clean(x.name, 30) : "";
     famHasOld = !!x && (x.legacy === true || !!x.restored);
     if (famName) lsSet("dd.family", famName);
-    renderFam();
+    renderFam(); scheduleCache();
   }, subErr));
-  unsubs.push(onSnapshot(fcol("members"), s => { members = s.docs.map(parseMember).filter(Boolean).sort(byOrder); loaded.members = true; renderAll(); }, subErr));
-  unsubs.push(onSnapshot(fcol("chores"), s => { chores = s.docs.map(parseChore).filter(Boolean).sort(byOrder); loaded.chores = true; renderAll(); }, subErr));
+  unsubs.push(onSnapshot(fcol("members"), s => { members = s.docs.map(parseMember).filter(Boolean).sort(byOrder); loaded.members = true; live.members = true; renderAll(); scheduleCache(); }, subErr));
+  unsubs.push(onSnapshot(fcol("chores"), s => { chores = s.docs.map(parseChore).filter(Boolean).sort(byOrder); loaded.chores = true; live.chores = true; renderAll(); scheduleCache(); }, subErr));
   subEntries();
 }
 function unsubscribeAll() {
   unsubs.forEach(u => u()); unsubs = [];
   if (unsubEntries) { unsubEntries(); unsubEntries = null; }
   if (unsubMonth) { unsubMonth(); unsubMonth = null; }
-  monthData = { ym: null, list: [], loaded: false }; viewMonth = null; firstMonth = null;
-  members = []; chores = []; ENT = []; ghostM = {}; ghostC = {};
+  monthData = { ym: null, base: [], list: [], loaded: false }; viewMonth = null; firstMonth = null;
+  members = []; chores = []; ENT = []; baseENT = []; ghostM = {}; ghostC = {};
+  pend.add.clear(); pend.del.clear(); pend.note.clear(); clearTimeout(cacheT);
   loaded.members = loaded.chores = loaded.entries = false; tilesSig = "";
+  live.members = live.chores = live.entries = false;
 }
 
 function startSession(user) {
@@ -1470,6 +1553,8 @@ function startSession(user) {
   editNote = null; editMember = null; iconEdit = null; addingChore = false; showAllHist = false;
   $("#login").hidden = true; $("#app").hidden = false;
   showNotice("");
+  live.members = live.chores = live.entries = false;
+  loadCache();
   renderHeader(); renderSegs(); renderTabs(); renderFam(); renderAll(); subscribe(); loadFirstMonth();
 }
 function endSession() {
@@ -1488,7 +1573,12 @@ function checkDay() {
   if (now.getHours() !== lastHour) { lastHour = now.getHours(); if (famId && range === "day" && tab === "wyniki" && ready()) renderResults(); }
 }
 setInterval(checkDay, 30000);
-document.addEventListener("visibilitychange", () => { if (!document.hidden) { checkDay(); checkUpdate(); } });
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) { hiddenAt = Date.now(); saveCache(); return; }
+  checkDay(); checkUpdate();
+  if (hiddenAt && Date.now() - hiddenAt > 10000) refreshConnection();
+  hiddenAt = 0;
+});
 
 let migrating = false;
 onAuthStateChanged(auth, user => {
